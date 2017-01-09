@@ -1,14 +1,23 @@
 [workspace]
 resolver = "2"
-members = ["projects/*"]
-default-members = [
-    "projects/sub_projects",
-]
-exclude = [
-    "projects/.DS_Store",
-]
+members = ["projects/open-ssh.rs/crates/core", "projects/open-ssh.rs/crates/napi", "projects/open-ssh.rs/crates/cli"]
+default-members = ["projects/open-ssh.rs/crates/core", "projects/open-ssh.rs/crates/napi", "projects/open-ssh.rs/crates/cli"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.90"
+license = "Apache-2.0"
+authors = ["OpenSSH Authors"]
+repository = "https://github.com/nyar-os/OpenSSH"
 
 [workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Cross-repo git dependencies must pin the full 40-character revision.
+wae = { git = "https://github.com/doki-land/wae-framework.git", rev = "ae0db25961a72a2abc51a24b097f4363093c5394" }
+open-ssh-core = { path = "projects/open-ssh.rs/crates/core", version = "0.0.0" }
+open-ssh-cli = { path = "projects/open-ssh.rs/crates/cli", version = "0.0.0" }
 
 [profile.release]
 lto = true

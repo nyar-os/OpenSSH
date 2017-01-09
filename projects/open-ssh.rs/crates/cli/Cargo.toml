@@ -1,0 +1,15 @@
+[package]
+name = "open-ssh-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Stable command ids, exit codes, and the machine-readable CLI envelope for OpenSSH"
+publish = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+open-ssh-core = { workspace = true }

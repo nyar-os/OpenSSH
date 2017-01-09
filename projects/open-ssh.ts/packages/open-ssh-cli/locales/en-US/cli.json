@@ -1,0 +1,37 @@
+{
+    "cli": {
+        "intro": "open-ssh — remote host manager with transport adapters. Non-interactive CLI for agents and humans.",
+        "cmd": {
+            "capabilities": "Report the capability matrix and per-transport support",
+            "version": "Print the native addon version",
+            "audit": "Read audit records for the current actor",
+            "gui": "Open the VMZ GUI window and pump host events until it closes",
+            "connect": "Connect to a target and establish a session",
+            "exec": "Execute a command and return stdout, stderr, and the exit code",
+            "transfer": "Upload, download, and synchronize files",
+            "session": "Enumerate sessions and report their state",
+            "host-inventory": "Inventory and group managed hosts",
+            "port-forward": "Configure local, remote, and dynamic port forwarding",
+            "key-management": "Generate, import, protect, and inspect host keys",
+            "known-hosts": "Verify host keys and update known hosts entries",
+            "credential-store": "Store credentials and passphrases",
+            "host-install": "Install the host integration and desktop entry",
+            "host-uninstall": "Remove the host integration and clean residual state"
+        },
+        "opt": {
+            "actor": "Audit actor id (user or agent name)",
+            "actor-kind": "Audit actor kind",
+            "actor-source": "Audit actor source (cli, plugin, gui, ...)",
+            "json": "Emit machine-readable JSON on stdout",
+            "transport": "Transport adapter to use. Support is reported per capability",
+            "dry-run": "Plan only, do not touch host state",
+            "kind": "Filter audit records by actor kind",
+            "id": "Filter audit records by actor id",
+            "capability": "Filter audit records by capability id",
+            "from-ms": "Filter audit records from this Unix timestamp in milliseconds",
+            "to-ms": "Filter audit records up to this Unix timestamp in milliseconds",
+            "limit": "Maximum number of audit records",
+            "content-dir": "Directory containing the staged GUI build"
+        }
+    }
+}

@@ -1,0 +1,17 @@
+{
+    "name": "@wae/open-ssh-win32-x64",
+    "version": "0.0.0",
+    "description": "Native addon for OpenSSH on Windows x64",
+    "os": [
+        "win32"
+    ],
+    "cpu": [
+        "x64"
+    ],
+    "main": "open-ssh.win32-x64.node",
+    "files": [
+        "open-ssh.win32-x64.node",
+        "Readme.md"
+    ],
+    "license": "Apache-2.0"
+}

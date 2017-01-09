@@ -1,0 +1,32 @@
+{
+    "name": "@wae/open-ssh",
+    "version": "0.0.0",
+    "description": "OpenSSH facade: native loading, capability model, and audit client",
+    "license": "Apache-2.0",
+    "type": "module",
+    "engines": {
+        "node": ">=22"
+    },
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js"
+        }
+    },
+    "files": [
+        "dist",
+        "Readme.md"
+    ],
+    "scripts": {
+        "build": "tsc -p tsconfig.json"
+    },
+    "optionalDependencies": {
+        "@wae/open-ssh-win32-x64": "workspace:*"
+    },
+    "devDependencies": {
+        "@types/node": "^22.20.4",
+        "typescript": "^5.9.2"
+    }
+}

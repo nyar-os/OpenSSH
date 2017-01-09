@@ -1,0 +1,21 @@
+[package]
+name = "open-ssh-napi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Platform-neutral N-API surface for OpenSSH"
+publish = false
+
+[lib]
+name = "open_ssh_napi"
+crate-type = ["cdylib"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+wae = { workspace = true }
+open-ssh-core = { workspace = true }
+open-ssh-cli = { workspace = true }

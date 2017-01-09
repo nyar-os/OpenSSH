@@ -1,11 +1,26 @@
 {
+    "name": "@wae/open-ssh-workspace",
     "private": true,
+    "type": "module",
+    "packageManager": "pnpm@10.28.0",
+    "description": "OpenSSH workspace: Rust crates, npm application packages, CLI, skills, and VMZ UI",
+    "license": "Apache-2.0",
+    "engines": {
+        "node": ">=22"
+    },
     "scripts": {
-        "doc": "cargo doc --no-deps --all-features",
-        "test": "cargo test --release",
-        "fmt": "cargo fmt --all",
-        "p": "git push && git push --tags --prune",
-        "reset": "git reset Head~ --soft",
-        "u": "cargo upgrade --workspace"
+        "build": "wae build",
+        "build:napi": "wae native build",
+        "build:ts": "pnpm --filter @wae/open-ssh --filter @wae/open-ssh-cli run build",
+        "build:ui": "pnpm --filter @wae/open-ssh-ui run build",
+        "stage:napi": "wae native stage",
+        "smoke:napi": "wae native smoke",
+        "check:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
+        "gui": "wae build && pnpm --filter @wae/open-ssh-cli exec node ./dist/cli.js gui"
+    },
+    "devDependencies": {
+        "@wae/wae": "0.0.5",
+        "@types/node": "^22.20.4",
+        "typescript": "^5.9.2"
     }
 }
