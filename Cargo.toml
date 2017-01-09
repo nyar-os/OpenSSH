@@ -14,6 +14,14 @@ repository = "https://github.com/nyar-os/OpenSSH"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Cryptographic primitives only. Protocol framing, negotiation, channels, and
+# key-material handling are implemented in this repository.
+sha2 = "0.10"
+aes-gcm = "0.11"
+x25519-dalek = { version = "3", features = ["static_secrets"] }
+ed25519-dalek = "3"
+base64 = "0.22"
+getrandom = "0.3"
 # Cross-repo git dependencies must pin the full 40-character revision.
 wae = { git = "https://github.com/doki-land/wae-framework.git", rev = "ae0db25961a72a2abc51a24b097f4363093c5394" }
 open-ssh-core = { path = "projects/open-ssh.rs/crates/core", version = "0.0.0" }

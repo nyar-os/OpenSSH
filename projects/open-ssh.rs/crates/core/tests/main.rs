@@ -20,10 +20,29 @@ const DOMAIN: [&str; 11] = [
 
 const META: [&str; 4] = [capability_ids::CAPABILITIES, capability_ids::VERSION, capability_ids::AUDIT_QUERY, capability_ids::AUDIT_CONFIGURE];
 
+const UNAVAILABLE_DOMAIN: [&str; 10] = [
+    capability_ids::CONNECT,
+    capability_ids::TRANSFER,
+    capability_ids::SESSION,
+    capability_ids::HOST_INVENTORY,
+    capability_ids::PORT_FORWARD,
+    capability_ids::KEY_MANAGEMENT,
+    capability_ids::KNOWN_HOSTS,
+    capability_ids::CREDENTIAL_STORE,
+    capability_ids::HOST_INSTALL,
+    capability_ids::HOST_UNINSTALL,
+];
+
 #[test]
-fn every_domain_capability_is_registered_as_not_implemented() {
+fn exec_is_available_and_every_other_domain_capability_stays_not_implemented() {
     let report = capabilities();
-    for id in DOMAIN {
+    let exec = report.get(capability_ids::EXEC).expect("missing capability row: exec");
+    assert_eq!(exec.state, None, "exec must be available");
+    assert_eq!(exec.code, None, "an available capability carries no state code");
+    assert!(exec.is_available(), "exec must report as available");
+    assert!(!exec.detail.is_empty(), "exec must describe what it does");
+
+    for id in UNAVAILABLE_DOMAIN {
         let item = report.get(id).unwrap_or_else(|| panic!("missing capability row: {id}"));
         assert_eq!(item.state, Some(CapabilityState::NotImplemented), "{id} must stay not_implemented");
         assert_eq!(item.code, Some("not_implemented"), "{id} must carry the stable code");

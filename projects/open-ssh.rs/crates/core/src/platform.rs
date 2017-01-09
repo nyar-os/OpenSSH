@@ -117,18 +117,98 @@ const KEY_TRANSPORTS: &[TransportSpec] =
 const KNOWN_HOSTS_TRANSPORTS: &[TransportSpec] =
     &[("ssh", SUPPORTS, "planned"), ("rdp", NO_KNOWN_HOSTS, "RDP uses a server certificate fingerprint check, not `known_hosts`.")];
 
-const DOMAIN: &[(&str, &[TransportSpec], &str)] = &[
-    (capability_ids::CONNECT, CONNECT_TRANSPORTS, "Connect to a target and establish a session over the selected transport."),
-    (capability_ids::EXEC, EXEC_TRANSPORTS, "Execute a command and return stdout, stderr, and the exit code."),
-    (capability_ids::TRANSFER, TRANSFER_TRANSPORTS, "Upload, download, and synchronize files with a dry-run plan."),
-    (capability_ids::SESSION, SESSION_TRANSPORTS, "Enumerate sessions and report their state and disconnect codes."),
-    (capability_ids::HOST_INVENTORY, HOST_TRANSPORTS, "Inventory and group managed hosts for every transport."),
-    (capability_ids::PORT_FORWARD, PORT_FORWARD_TRANSPORTS, "Configure local, remote, and dynamic port forwarding."),
-    (capability_ids::KEY_MANAGEMENT, KEY_TRANSPORTS, "Generate, import, protect, and inspect host keys."),
-    (capability_ids::KNOWN_HOSTS, KNOWN_HOSTS_TRANSPORTS, "Verify host keys and update `known_hosts` with explicit conflict handling."),
-    (capability_ids::CREDENTIAL_STORE, HOST_TRANSPORTS, "Store credentials and passphrases in the Windows credential store."),
-    (capability_ids::HOST_INSTALL, HOST_TRANSPORTS, "Install the host integration and desktop entry."),
-    (capability_ids::HOST_UNINSTALL, HOST_TRANSPORTS, "Remove the host integration and clean residual state."),
+/// One registered domain capability.
+struct DomainRow {
+    /// Stable capability id.
+    id: &'static str,
+    /// `null` when at least one transport can invoke it.
+    state: Option<CapabilityState>,
+    /// Why the capability is unavailable, or which transport serves it.
+    reason: &'static str,
+    /// What the capability does.
+    detail: &'static str,
+    /// Per-transport support.
+    transports: &'static [TransportSpec],
+}
+
+const DOMAIN: &[DomainRow] = &[
+    DomainRow {
+        id: capability_ids::CONNECT,
+        state: Some(CapabilityState::NotImplemented),
+        reason: SKELETON_REASON,
+        detail: "Connect to a target and establish a session over the selected transport.",
+        transports: CONNECT_TRANSPORTS,
+    },
+    DomainRow {
+        id: capability_ids::EXEC,
+        state: None,
+        reason: "Available over the ssh transport. The rdp transport has no command channel.",
+        detail: "Execute one command and return stdout, stderr, and the exit code.",
+        transports: EXEC_TRANSPORTS,
+    },
+    DomainRow {
+        id: capability_ids::TRANSFER,
+        state: Some(CapabilityState::NotImplemented),
+        reason: SKELETON_REASON,
+        detail: "Upload, download, and synchronize files with a dry-run plan.",
+        transports: TRANSFER_TRANSPORTS,
+    },
+    DomainRow {
+        id: capability_ids::SESSION,
+        state: Some(CapabilityState::NotImplemented),
+        reason: SKELETON_REASON,
+        detail: "Enumerate sessions and report their state and disconnect codes.",
+        transports: SESSION_TRANSPORTS,
+    },
+    DomainRow {
+        id: capability_ids::HOST_INVENTORY,
+        state: Some(CapabilityState::NotImplemented),
+        reason: SKELETON_REASON,
+        detail: "Inventory and group managed hosts for every transport.",
+        transports: HOST_TRANSPORTS,
+    },
+    DomainRow {
+        id: capability_ids::PORT_FORWARD,
+        state: Some(CapabilityState::NotImplemented),
+        reason: SKELETON_REASON,
+        detail: "Configure local, remote, and dynamic port forwarding.",
+        transports: PORT_FORWARD_TRANSPORTS,
+    },
+    DomainRow {
+        id: capability_ids::KEY_MANAGEMENT,
+        state: Some(CapabilityState::NotImplemented),
+        reason: SKELETON_REASON,
+        detail: "Generate, import, protect, and inspect host keys.",
+        transports: KEY_TRANSPORTS,
+    },
+    DomainRow {
+        id: capability_ids::KNOWN_HOSTS,
+        state: Some(CapabilityState::NotImplemented),
+        reason: SKELETON_REASON,
+        detail: "Verify host keys and update `known_hosts` with explicit conflict handling.",
+        transports: KNOWN_HOSTS_TRANSPORTS,
+    },
+    DomainRow {
+        id: capability_ids::CREDENTIAL_STORE,
+        state: Some(CapabilityState::NotImplemented),
+        reason: SKELETON_REASON,
+        detail: "Store credentials and passphrases in the Windows credential store.",
+        transports: HOST_TRANSPORTS,
+    },
+    DomainRow {
+        id: capability_ids::HOST_INSTALL,
+        state: Some(CapabilityState::NotImplemented),
+        reason: SKELETON_REASON,
+        detail: "Install the host integration and desktop entry.",
+        transports: HOST_TRANSPORTS,
+    },
+    DomainRow {
+        id: capability_ids::HOST_UNINSTALL,
+        state: Some(CapabilityState::NotImplemented),
+        reason: SKELETON_REASON,
+        detail: "Remove the host integration and clean residual state.",
+        transports: HOST_TRANSPORTS,
+    },
 ];
 
 const META: &[(&str, &str)] = &[
@@ -143,20 +223,22 @@ pub const fn platform() -> PlatformInfo {
     PlatformInfo { os: std::env::consts::OS, arch: std::env::consts::ARCH }
 }
 
-/// Build the capability report. Domain rows stay unavailable in the skeleton round.
+/// Build the capability report. `exec` is available over `ssh`. Every other
+/// domain row stays unavailable in this round.
 pub fn capabilities() -> CapabilitiesReport {
     let mut items = Vec::with_capacity(DOMAIN.len() + META.len());
     for (id, detail) in META {
         items.push(CapabilityItem { id, state: None, code: None, reason: "available", detail, transports: Vec::new() });
     }
-    for (id, transports, detail) in DOMAIN {
+    for row in DOMAIN {
         items.push(CapabilityItem {
-            id,
-            state: Some(CapabilityState::NotImplemented),
-            code: Some("not_implemented"),
-            reason: SKELETON_REASON,
-            detail,
-            transports: transports
+            id: row.id,
+            state: row.state,
+            code: row.state.map(CapabilityState::code),
+            reason: row.reason,
+            detail: row.detail,
+            transports: row
+                .transports
                 .iter()
                 .map(|(transport, state, reason)| TransportRow { transport, state: *state, code: state.map(CapabilityState::code), reason })
                 .collect(),
@@ -170,10 +252,11 @@ pub fn capabilities() -> CapabilitiesReport {
         transports: TRANSPORTS.to_vec(),
         items,
         notes: vec![
-            "Domain capabilities are intentionally not_implemented in this skeleton round.",
+            "`exec` is available over `ssh` only. Every other domain capability stays not_implemented in this round.",
             "Capability, version, audit, and GUI meta capabilities are available.",
             "Capability ids describe a goal. Transport support is reported per row and never encoded in the id.",
             "RDP supports connect, session, and transfer only. It has no command channel, so `exec` is not_implemented for rdp.",
+            "`exec` requires an explicit host key pin. An unknown or mismatched host key fails instead of being trusted.",
             "No capability may fall back to an external ssh, sftp, scp, mstsc, or winrs process.",
         ],
     }

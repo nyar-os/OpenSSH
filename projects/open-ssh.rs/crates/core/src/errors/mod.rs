@@ -50,6 +50,24 @@ pub enum ErrorCode {
     DependencyBlocked,
     /// The caller passed an invalid argument.
     InvalidArgument,
+    /// The transport could not establish a connection.
+    ConnectFailed,
+    /// The connection or a protocol step exceeded its deadline.
+    ConnectTimeout,
+    /// The peer rejected the supplied credentials.
+    AuthFailed,
+    /// The peer and this client share no admitted algorithm.
+    NegotiationFailed,
+    /// No host key pin was supplied, so the server identity is unverified.
+    HostKeyUnverified,
+    /// The server host key does not match the supplied pin.
+    HostKeyMismatch,
+    /// The identity file is unreadable or uses an unsupported key format.
+    IdentityRejected,
+    /// The peer violated the protocol or sent an unacceptable message.
+    ProtocolError,
+    /// The session channel or the exec request failed after connecting.
+    ExecFailed,
     /// An I/O operation failed.
     Io,
     /// An internal invariant failed.
@@ -64,6 +82,15 @@ impl ErrorCode {
             Self::NotImplemented => "not_implemented",
             Self::DependencyBlocked => "dependency_blocked",
             Self::InvalidArgument => "invalid_argument",
+            Self::ConnectFailed => "connect_failed",
+            Self::ConnectTimeout => "connect_timeout",
+            Self::AuthFailed => "auth_failed",
+            Self::NegotiationFailed => "negotiation_failed",
+            Self::HostKeyUnverified => "host_key_unverified",
+            Self::HostKeyMismatch => "host_key_mismatch",
+            Self::IdentityRejected => "identity_rejected",
+            Self::ProtocolError => "protocol_error",
+            Self::ExecFailed => "exec_failed",
             Self::Io => "io_error",
             Self::Internal => "internal_error",
         }
