@@ -71,8 +71,10 @@ impl CapabilityItem {
 pub struct CapabilitiesReport {
     /// Product name.
     pub app: &'static str,
-    /// Current host platform.
-    pub platform: PlatformInfo,
+    /// Operating system constant such as `windows`.
+    pub platform: &'static str,
+    /// CPU architecture constant such as `x86_64`.
+    pub arch: &'static str,
     /// Native package version.
     pub version: &'static str,
     /// Transport adapters known to the product.
@@ -162,7 +164,8 @@ pub fn capabilities() -> CapabilitiesReport {
     }
     CapabilitiesReport {
         app: "open-ssh",
-        platform: platform(),
+        platform: platform().os,
+        arch: platform().arch,
         version: env!("CARGO_PKG_VERSION"),
         transports: TRANSPORTS.to_vec(),
         items,
