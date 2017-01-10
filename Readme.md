@@ -2,20 +2,24 @@
 
 Transport-aware remote host manager. Capabilities are defined by the goal
 (`connect`, `exec`, `transfer`, `session`), and protocol adapters are a separate
-dimension. In this skeleton round every domain capability refuses with
-`not_implemented`, and no external `ssh`, `sftp`, `scp`, `mstsc`, or `winrs`
-process is ever started.
+dimension. `exec` runs one command over a real `ssh` connection. Every other
+domain capability still refuses with `not_implemented`, and no external `ssh`,
+`sftp`, `scp`, `mstsc`, or `winrs` process is ever started.
 
 ## Transports
 
 | Transport | connect | exec | transfer | session |
 |-----------|---------|------|----------|---------|
-| `ssh` | supported | supported | SFTP | supported |
-| `rdp` | supported | not available | drive redirection | supported |
+| `ssh` | not implemented | supported | SFTP | not implemented |
+| `rdp` | not implemented | not available | drive redirection | not implemented |
 
 RDP has no command channel, so `exec` over RDP is not available and stays
 `not_implemented`. The product does not guarantee that one port offers both
 connection and command execution. Availability depends on the transport.
+
+`exec` authenticates with a password or an unencrypted `ssh-ed25519` key and
+requires an explicit `SHA256:` host key pin. Host keys are never trusted on
+first use.
 
 ## Layout
 
@@ -57,11 +61,20 @@ CLI surface:
 ```sh
 open-ssh capabilities --json
 open-ssh version
-open-ssh session --transport ssh --json
+open-ssh exec --transport ssh --host 10.0.0.5 --user deploy \
+  --command "uname -a" --identity ~/.ssh/id_ed25519 \
+  --host-key-sha256 SHA256:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx --json
+open-ssh exec --transport ssh --host 10.0.0.5 --user deploy \
+  --command "uname -a" --password-env OPEN_SSH_PASSWORD \
+  --host-key-sha256 SHA256:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx --dry-run --json
 open-ssh exec --transport rdp --json
 open-ssh transfer --transport ssh --dry-run --json
 open-ssh audit --kind agent --limit 20 --json
 ```
+
+`exec` writes captured stdout and stderr unchanged in human mode. The exact
+remote status is reported as `exitCode`, and the process exits `0` only when it
+is `0`.
 
 Exit codes: `0` success, `1` failure, `2` usage, `3` capability unavailable,
 `4` canceled. `--json` emits `wae.cli-result/v0` envelopes.

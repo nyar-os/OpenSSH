@@ -3,12 +3,16 @@
 //! Only the packet framing is implemented here. Negotiation, key exchange,
 //! authentication, and channels live in the sibling modules.
 
-use std::io::{ErrorKind, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
-use std::time::{Duration, Instant};
+use std::{
+    io::{ErrorKind, Read, Write},
+    net::{TcpStream, ToSocketAddrs},
+    time::{Duration, Instant},
+};
 
-use aes_gcm::aead::{AeadInOut, KeyInit, Nonce, Tag};
-use aes_gcm::Aes256Gcm;
+use aes_gcm::{
+    Aes256Gcm,
+    aead::{AeadInOut, KeyInit, Nonce, Tag},
+};
 
 use crate::errors::{Error, ErrorCode};
 
@@ -54,9 +58,9 @@ impl AesGcmState {
     fn decrypt(&mut self, aad: &[u8], buffer: &mut [u8], tag: &[u8; 16]) -> Result<()> {
         let nonce = Nonce::<Aes256Gcm>::from(self.iv);
         let tag = Tag::<Aes256Gcm>::from(*tag);
-        self.cipher.decrypt_inout_detached(&nonce, aad, buffer.into(), &tag).map_err(|_| {
-            Error::new(ErrorCode::ProtocolError, "packet authentication failed, so the peer or the wire is not trustworthy")
-        })?;
+        self.cipher
+            .decrypt_inout_detached(&nonce, aad, buffer.into(), &tag)
+            .map_err(|_| Error::new(ErrorCode::ProtocolError, "packet authentication failed, so the peer or the wire is not trustworthy"))?;
         self.advance();
         Ok(())
     }
@@ -86,6 +90,37 @@ pub struct Transport {
 }
 
 impl Transport {
+    /// Wrap an already accepted connection for the loopback fixture.
+    #[cfg(test)]
+    pub(crate) fn accept(stream: TcpStream, timeout: Duration) -> Self {
+        stream.set_nodelay(true).ok();
+        Self {
+            stream,
+            deadline: Instant::now() + timeout,
+            inbound: None,
+            outbound: None,
+            client_version: String::new(),
+            server_version: String::new(),
+            session_id: Vec::new(),
+            client_kexinit: Vec::new(),
+            server_kexinit: Vec::new(),
+        }
+    }
+
+    /// Server side of the identification exchange, used by the loopback fixture.
+    #[cfg(test)]
+    pub(crate) fn exchange_versions_as_server(&mut self) -> Result<()> {
+        let server = "SSH-2.0-WAE_Fixture_0.0.0\r\n";
+        self.write_all(server.as_bytes())?;
+        let line = self.read_line()?;
+        if !line.starts_with("SSH-2.0-") && !line.starts_with("SSH-1.99-") {
+            return Err(Error::new(ErrorCode::NegotiationFailed, "the client does not offer SSH protocol 2.0"));
+        }
+        self.server_version = server.trim_end_matches("\r\n").to_string();
+        self.client_version = line;
+        Ok(())
+    }
+
     /// Open a TCP connection under one deadline.
     pub fn connect(host: &str, port: u16, timeout: Duration) -> Result<Self> {
         if host.is_empty() {
@@ -140,7 +175,8 @@ impl Transport {
         loop {
             let line = self.read_line()?;
             if let Some(rest) = line.strip_prefix("SSH-") {
-                let Some((protocol, _software)) = rest.split_once('-') else {
+                let Some((protocol, _software)) = rest.split_once('-')
+                else {
                     return Err(Error::new(ErrorCode::ProtocolError, "peer sent a malformed identification string"));
                 };
                 if protocol != "2.0" && protocol != "1.99" {

@@ -2,9 +2,11 @@
 
 use crate::errors::{Error, ErrorCode};
 
-use super::wire::{Reader, Writer};
-use super::transport::Transport;
-use super::Result;
+use super::{
+    Result,
+    transport::Transport,
+    wire::{Reader, Writer},
+};
 
 const MSG_DISCONNECT: u8 = 1;
 const MSG_IGNORE: u8 = 2;
@@ -156,10 +158,7 @@ pub fn exec(transport: &mut Transport, command: &str) -> Result<ExecOutcome> {
 
 fn push(target: &mut Vec<u8>, data: &[u8]) -> Result<()> {
     if target.len() + data.len() > MAX_CAPTURE {
-        return Err(Error::new(
-            ErrorCode::ExecFailed,
-            format!("command output exceeded the {MAX_CAPTURE} byte capture limit"),
-        ));
+        return Err(Error::new(ErrorCode::ExecFailed, format!("command output exceeded the {MAX_CAPTURE} byte capture limit")));
     }
     target.extend_from_slice(data);
     Ok(())

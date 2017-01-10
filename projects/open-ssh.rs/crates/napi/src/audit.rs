@@ -71,6 +71,52 @@ pub fn run<T>(capability: &str, mode: Mode, params: Value, body: impl FnOnce() -
     run_with(&auditor, capability, mode, params, body)
 }
 
+/// Record one capability call whose audit params only become complete after the
+/// call, for example the remote exit status and captured byte counts.
+pub fn run_metered<T>(capability: &str, mode: Mode, params: Value, body: impl FnOnce() -> CoreResult<(T, Value, Summary)>) -> CoreResult<T> {
+    run_metered_with(&auditor(), capability, mode, params, body)
+}
+
+/// [`run_metered`] against an explicit auditor, used by tests.
+pub fn run_metered_with<T>(
+    auditor: &Auditor,
+    capability: &str,
+    mode: Mode,
+    params: Value,
+    body: impl FnOnce() -> CoreResult<(T, Value, Summary)>,
+) -> CoreResult<T> {
+    let call = auditor.call(capability, mode).params(params.clone());
+    match body() {
+        Ok((value, extra, summary)) => {
+            let _ = call.params(merge(params, extra)).targets(summary.count, summary.summary).succeed();
+            Ok(value)
+        }
+        Err(error) => {
+            record_failure(call, &error);
+            Err(error)
+        }
+    }
+}
+
+fn merge(mut base: Value, extra: Value) -> Value {
+    if let (Value::Object(base), Value::Object(extra)) = (&mut base, extra) {
+        base.extend(extra);
+    }
+    base
+}
+
+fn record_failure(call: wae::audit::Call<'_>, error: &CoreError) {
+    let code = error.code().as_str();
+    match error_outcome(error) {
+        Outcome::Rejected => {
+            let _ = call.reject(code);
+        }
+        _ => {
+            let _ = call.fail(code);
+        }
+    }
+}
+
 /// [`run`] against an explicit auditor, used by tests.
 pub fn run_with<T>(
     auditor: &Auditor,
@@ -162,6 +208,20 @@ mod tests {
         let entries = auditor.query(&Query::default()).unwrap();
         assert_eq!(entries[0].outcome, Outcome::Rejected);
         assert_eq!(entries[0].error_code.as_deref(), Some("not_implemented"));
+    }
+
+    #[test]
+    fn measured_params_are_merged_before_write() {
+        let (auditor, _) = test_auditor();
+        run_metered_with(&auditor, "exec", Mode::Execute, serde_json::json!({ "hostHash": "abc", "commandBytes": 7 }), || {
+            Ok((1, serde_json::json!({ "exitCode": 3, "stdoutBytes": 0 }), Summary::new(1, "one command")))
+        })
+        .unwrap();
+        let entries = auditor.query(&Query::default()).unwrap();
+        assert_eq!(entries[0].params["exitCode"], 3);
+        assert_eq!(entries[0].params["stdoutBytes"], 0);
+        assert_eq!(entries[0].params["hostHash"], "abc");
+        assert_eq!(entries[0].params["commandBytes"], 7);
     }
 
     #[test]

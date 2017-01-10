@@ -5,18 +5,19 @@
 //! capabilities arrive as structured upstream errors. Audit is wrapped at every
 //! capability boundary through the shared `wae.audit/v0` facility.
 //!
-//! The skeleton round registers the full capability table but implements no
-//! domain behaviour. Every domain command resolves to `not_implemented` with a
+//! The `exec` capability runs one command over an in-process SSH client. Every
+//! other domain capability is still registered as `not_implemented` with a
 //! stable code instead of fabricating a result.
 
 #![deny(missing_docs)]
 
-use std::{cell::RefCell, env, path::PathBuf};
+use std::{cell::RefCell, env, path::PathBuf, time::Duration};
 
 use open_ssh_core::{
     CapabilityState, Error as CoreError, ErrorCode,
     audit::capability_ids,
     platform::{CapabilityItem, capabilities as core_capabilities, platform as core_platform},
+    ssh::{self, ExecAuth, ExecRequest, ExecResult},
 };
 use serde_json::{Value, json};
 use wae::{
@@ -123,19 +124,17 @@ fn capability_report() -> open_ssh_core::platform::CapabilitiesReport {
 
 /// Resolve a domain capability to its structured refusal.
 ///
-/// Meta capabilities keep dedicated exports, unknown ids and unknown transports
-/// are caller errors, and every registered domain capability is still
-/// `not_implemented`. When a transport is supplied, a transport that does not
-/// carry the capability refuses with that transport's own reason.
+/// Meta capabilities and available domain capabilities keep dedicated exports,
+/// unknown ids and unknown transports are caller errors, and every remaining
+/// domain capability is still `not_implemented`. When a transport is supplied, a
+/// transport that does not carry the capability refuses with that transport's
+/// own reason.
 fn invoke_error(capability: &str, transport: Option<&str>) -> CoreError {
     let report = core_capabilities();
     let Some(item) = report.get(capability)
     else {
         return CoreError::new(ErrorCode::InvalidArgument, format!("unknown capability `{capability}`"));
     };
-    if item.is_available() {
-        return CoreError::new(ErrorCode::InvalidArgument, format!("`{capability}` is a meta capability with a dedicated export"));
-    }
     if let Some(transport) = transport {
         let Some(row) = item.transport(transport)
         else {
@@ -144,6 +143,9 @@ fn invoke_error(capability: &str, transport: Option<&str>) -> CoreError {
         if let Some(state) = row.state {
             return CoreError::unavailable(state, item.id, row.reason);
         }
+    }
+    if item.is_available() {
+        return CoreError::new(ErrorCode::InvalidArgument, format!("`{capability}` is available through its dedicated export"));
     }
     CoreError::unavailable(item.state.unwrap_or(CapabilityState::NotImplemented), item.id, item.reason)
 }
@@ -293,6 +295,102 @@ fn cli_contract(ctx: CallContext) -> Result<JsValue> {
     value_to_js(&ctx, &contract)
 }
 
+fn usage(message: impl Into<String>) -> Error {
+    core_error(CoreError::new(ErrorCode::InvalidArgument, message.into()))
+}
+
+fn optional_bool_prop(obj: JsValue, name: &str) -> Result<Option<bool>> {
+    let value = obj.get_named(name)?;
+    if value.is_undefined()? {
+        return Ok(None);
+    }
+    Ok(Some(value.as_bool()?))
+}
+
+fn required_string(obj: JsValue, name: &str) -> Result<String> {
+    match optional_string_prop(obj, name)? {
+        Some(value) if !value.trim().is_empty() => Ok(value),
+        _ => Err(usage(format!("exec requires `{name}`"))),
+    }
+}
+
+fn exec_request(arg: JsValue) -> Result<ExecRequest> {
+    let transport = optional_string_prop(arg, "transport")?.unwrap_or_else(|| "ssh".to_string());
+    let host = required_string(arg, "host")?;
+    let user = required_string(arg, "user")?;
+    let command = required_string(arg, "command")?;
+    let host_key_sha256 = optional_string_prop(arg, "hostKeySha256")?.unwrap_or_default();
+    let port = match optional_i64(arg, "port")? {
+        Some(value) if (1..=65535).contains(&value) => value as u16,
+        Some(_) => return Err(usage("`port` must be between 1 and 65535")),
+        None => 22,
+    };
+    let timeout_ms = match optional_i64(arg, "timeoutMs")? {
+        Some(value) if value > 0 => value as u64,
+        Some(_) => return Err(usage("`timeoutMs` must be greater than zero")),
+        None => 30_000,
+    };
+    let password = optional_string_prop(arg, "password")?;
+    let identity_path = optional_string_prop(arg, "identityPath")?;
+    let auth = match (password, identity_path) {
+        (Some(password), None) if !password.is_empty() => ExecAuth::Password(password),
+        (None, Some(path)) if !path.trim().is_empty() => ExecAuth::Identity(PathBuf::from(path)),
+        (Some(_), Some(_)) => return Err(usage("pass either `password` or `identityPath`, never both")),
+        _ => return Err(usage("exec requires `password` or `identityPath`")),
+    };
+    Ok(ExecRequest { transport, host, port, user, command, auth, host_key_sha256, timeout: Duration::from_millis(timeout_ms) })
+}
+
+/// Run one command over the `ssh` transport.
+///
+/// Audit params carry the target and the auth method but never the command
+/// body, the password, or the identity file contents.
+#[function]
+fn exec(ctx: CallContext) -> Result<JsValue> {
+    let arg = object_arg(&ctx)?.ok_or_else(|| usage("exec requires an options object"))?;
+    let request = exec_request(arg)?;
+    let dry_run = optional_bool_prop(arg, "dryRun")?.unwrap_or(false);
+    let params = json!({
+        "transport": &request.transport,
+        "hostHash": ssh::host_hash(&request.host),
+        "port": request.port,
+        "user": &request.user,
+        "authMethod": request.auth.name(),
+        "commandBytes": request.command.len(),
+        "hostKeySha256": &request.host_key_sha256,
+    });
+
+    if dry_run {
+        let result = audit::run(capability_ids::EXEC, Mode::DryRun, params, || {
+            let preview = ssh::preview(&request)?;
+            Ok((preview, Summary::new(1, format!("ssh exec preview for host {}", ssh::host_hash(&request.host)))))
+        });
+        return match result {
+            Ok(preview) => value_to_js(&ctx, &preview),
+            Err(error) => Err(core_error(error)),
+        };
+    }
+
+    let summary_host = ssh::host_hash(&request.host);
+    let port = request.port;
+    let user = request.user.clone();
+    let result = audit::run_metered(capability_ids::EXEC, Mode::Execute, params, move || {
+        let outcome: ExecResult = ssh::execute(request)?;
+        let extra = json!({
+            "exitCode": outcome.exit_code,
+            "stdoutBytes": outcome.stdout_bytes,
+            "stderrBytes": outcome.stderr_bytes,
+            "durationMs": outcome.duration_ms,
+        });
+        let summary = format!("ssh exec on host {summary_host}:{port} as {user}");
+        Ok((outcome, extra, Summary::new(1, summary)))
+    });
+    match result {
+        Ok(outcome) => value_to_js(&ctx, &outcome),
+        Err(error) => Err(core_error(error)),
+    }
+}
+
 #[function(js_name = "openGui")]
 fn open_gui(ctx: CallContext) -> Result<JsValue> {
     let arg = object_arg(&ctx)?;
@@ -400,7 +498,19 @@ fn audit_query(ctx: CallContext) -> Result<JsValue> {
     }
 }
 
-register_module![version, capabilities, invoke, cli_contract, open_gui, pump_events, close_gui, is_gui_open, configure_audit, audit_query];
+register_module![
+    version,
+    capabilities,
+    exec,
+    invoke,
+    cli_contract,
+    open_gui,
+    pump_events,
+    close_gui,
+    is_gui_open,
+    configure_audit,
+    audit_query
+];
 
 #[cfg(test)]
 mod tests {
@@ -428,7 +538,8 @@ mod tests {
         assert!(gui.is_available());
         assert!(gui.transports.is_empty());
         assert!(report.notes.iter().any(|note| note.contains("dependency_blocked")));
-        for id in [capability_ids::HOST_INSTALL, capability_ids::HOST_UNINSTALL, capability_ids::EXEC] {
+        assert!(report.get(capability_ids::EXEC).expect("exec row").is_available());
+        for id in [capability_ids::HOST_INSTALL, capability_ids::HOST_UNINSTALL, capability_ids::TRANSFER] {
             let item = report.get(id).unwrap_or_else(|| panic!("missing capability row: {id}"));
             assert!(!item.is_available());
             assert!(!item.reason.is_empty());
@@ -437,14 +548,19 @@ mod tests {
     }
 
     #[test]
-    fn invoke_refuses_every_domain_capability_with_its_stable_code() {
-        for id in
-            [capability_ids::CONNECT, capability_ids::EXEC, capability_ids::TRANSFER, capability_ids::SESSION, capability_ids::HOST_INVENTORY]
-        {
+    fn invoke_refuses_every_unavailable_domain_capability_with_its_stable_code() {
+        for id in [capability_ids::CONNECT, capability_ids::TRANSFER, capability_ids::SESSION, capability_ids::HOST_INVENTORY] {
             let error = invoke_error(id, None);
             assert_eq!(error.code(), ErrorCode::NotImplemented);
             assert_eq!(error.capability(), Some(id));
         }
+    }
+
+    #[test]
+    fn invoke_points_available_capabilities_at_their_export() {
+        let error = invoke_error(capability_ids::EXEC, None);
+        assert_eq!(error.code(), ErrorCode::InvalidArgument);
+        assert!(error.message().contains("dedicated export"));
     }
 
     #[test]
