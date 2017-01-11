@@ -1,6 +1,6 @@
 ---
 name: workflow
-description: Drive the transport-neutral OpenSSH CLI to read the capability matrix, select a transport, and preview file transfer without touching host state.
+description: Drive the transport-neutral OpenSSH CLI to read the capability matrix, run one command over SSH, and preview file transfer without touching host state.
 ---
 
 # OpenSSH agent workflow
@@ -43,12 +43,37 @@ from a capability id. Read the per-transport rows in the report.
 
    `open-ssh session --transport=<ssh|rdp> --json`
 
+## Command execution over SSH
+
+`exec` is the only available domain capability. It needs an explicit host key
+pin; the product never trusts an unknown key and never offers TOFU.
+
+6. Preview first. The preview resolves the target and the pin without opening a
+   connection.
+
+   `open-ssh exec --transport=ssh --host=<host> --user=<user> --command="<cmd>" --identity=<path> --host-key-sha256=<SHA256:...> --dry-run --json`
+
+7. Run the command. Pass the password through `--password-env` so it never
+   appears in the process command line or in audit records. Do not put a
+   password in `--command` or in any other flag.
+
+   `open-ssh exec --transport=ssh --host=<host> --user=<user> --command="<cmd>" --password-env=<VAR> --host-key-sha256=<SHA256:...> --json`
+
+8. Read `data.exitCode`, `data.stdout`, `data.stderr`, `data.stdoutBytes`, and
+   `data.stderrBytes`. The process exits `0` only when `exitCode` is `0`. A
+   non-zero remote status keeps its exact value in `exitCode` and exits `1`.
+
+   Error codes are distinct: `connect_failed`, `connect_timeout`,
+   `negotiation_failed`, `host_key_unverified`, `host_key_mismatch`,
+   `auth_failed`, `identity_rejected`, `protocol_error`, `exec_failed`. Do not
+   collapse them into one retry rule. `host_key_mismatch` must be reported, not
+   bypassed.
+
 ## File transfer
 
-Transfer is the only mutating capability in this skeleton. Preview the plan
-first and show it to the user. RDP transfer uses drive redirection and SSH
-transfer uses SFTP. The channel is selected by `--transport`, never by a
-capability id.
+Transfer stays `not_implemented` in this round. Preview the plan first and show
+it to the user. RDP transfer uses drive redirection and SSH transfer uses SFTP.
+The channel is selected by `--transport`, never by a capability id.
 
 4. Preview. `--dry-run` must come before any apply form.
 
@@ -68,9 +93,9 @@ id and the transport as separate fields. Use `--actor-kind agent` and a stable
 
 ## Safety
 
-- In this skeleton round every domain capability refuses with `not_implemented`.
-  A refusal is not a success. Do not fall back to an external `ssh`, `sftp`,
-  `scp`, `mstsc`, or `winrs` process.
+- `exec` is available over `ssh` only. Every other domain capability refuses
+  with `not_implemented`. A refusal is not a success. Do not fall back to an
+  external `ssh`, `sftp`, `scp`, `mstsc`, or `winrs` process.
 - Do not execute a mutating command without explicit confirmation（确认）from the
   user after the dry-run preview.
 - Do not retry a structured capability failure with elevated privileges. Report

@@ -31,7 +31,15 @@
             "from-ms": "按 Unix 毫秒时间戳过滤审计记录的起点",
             "to-ms": "按 Unix 毫秒时间戳过滤审计记录的终点",
             "limit": "审计记录的最大数量",
-            "content-dir": "已暂存 GUI 构建的目录"
+            "content-dir": "已暂存 GUI 构建的目录",
+            "host": "目标主机名或地址",
+            "port": "目标 TCP 端口（默认 22）",
+            "user": "远端用户名",
+            "command": "在远端主机执行的命令",
+            "identity": "未加密 ssh-ed25519 私钥路径",
+            "password-env": "保存远端口令的环境变量名",
+            "host-key-sha256": "固定校验的服务端主机密钥指纹，SHA256: 记法",
+            "timeout-ms": "连接与握手截止时间，毫秒（默认 30000）"
         }
     }
 }
