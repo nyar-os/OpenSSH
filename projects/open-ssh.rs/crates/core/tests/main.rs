@@ -20,9 +20,8 @@ const DOMAIN: [&str; 11] = [
 
 const META: [&str; 4] = [capability_ids::CAPABILITIES, capability_ids::VERSION, capability_ids::AUDIT_QUERY, capability_ids::AUDIT_CONFIGURE];
 
-const UNAVAILABLE_DOMAIN: [&str; 10] = [
+const UNAVAILABLE_DOMAIN: [&str; 9] = [
     capability_ids::CONNECT,
-    capability_ids::TRANSFER,
     capability_ids::SESSION,
     capability_ids::HOST_INVENTORY,
     capability_ids::PORT_FORWARD,
@@ -34,13 +33,15 @@ const UNAVAILABLE_DOMAIN: [&str; 10] = [
 ];
 
 #[test]
-fn exec_is_available_and_every_other_domain_capability_stays_not_implemented() {
+fn exec_and_transfer_are_available_and_every_other_domain_capability_stays_not_implemented() {
     let report = capabilities();
-    let exec = report.get(capability_ids::EXEC).expect("missing capability row: exec");
-    assert_eq!(exec.state, None, "exec must be available");
-    assert_eq!(exec.code, None, "an available capability carries no state code");
-    assert!(exec.is_available(), "exec must report as available");
-    assert!(!exec.detail.is_empty(), "exec must describe what it does");
+    for id in [capability_ids::EXEC, capability_ids::TRANSFER] {
+        let item = report.get(id).unwrap_or_else(|| panic!("missing capability row: {id}"));
+        assert_eq!(item.state, None, "{id} must be available");
+        assert_eq!(item.code, None, "an available capability carries no state code");
+        assert!(item.is_available(), "{id} must report as available");
+        assert!(!item.detail.is_empty(), "{id} must describe what it does");
+    }
 
     for id in UNAVAILABLE_DOMAIN {
         let item = report.get(id).unwrap_or_else(|| panic!("missing capability row: {id}"));
@@ -89,15 +90,28 @@ fn rdp_reports_no_exec_and_ssh_does() {
 }
 
 #[test]
-fn connect_transfer_and_session_are_supported_by_both_transports() {
+fn connect_and_session_are_supported_by_both_transports() {
     let report = capabilities();
-    for id in [capability_ids::CONNECT, capability_ids::TRANSFER, capability_ids::SESSION] {
+    for id in [capability_ids::CONNECT, capability_ids::SESSION] {
         let item = report.get(id).unwrap_or_else(|| panic!("missing capability row: {id}"));
         for transport in TRANSPORTS {
             let row = item.transport(transport).unwrap_or_else(|| panic!("{id} is missing `{transport}`"));
             assert!(row.supports(), "{id} must be supported over `{transport}`");
         }
     }
+}
+
+#[test]
+fn transfer_supports_ssh_and_refuses_the_rdp_drive_redirection_path() {
+    let report = capabilities();
+    let transfer = report.get(capability_ids::TRANSFER).expect("transfer row");
+    let ssh = transfer.transport("ssh").expect("ssh transfer row");
+    assert!(ssh.supports(), "ssh must support transfer");
+    let rdp = transfer.transport("rdp").expect("rdp transfer row");
+    assert!(!rdp.supports(), "rdp transfer needs drive redirection, which this round does not implement");
+    assert_eq!(rdp.state, Some(CapabilityState::NotImplemented));
+    assert_eq!(rdp.code, Some("not_implemented"));
+    assert!(rdp.reason.contains("drive redirection"), "rdp must explain the missing drive redirection path");
 }
 
 #[test]

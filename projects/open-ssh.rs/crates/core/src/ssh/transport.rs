@@ -346,7 +346,7 @@ fn timeout_error(message: impl Into<String>) -> Error {
 fn map_read_error(error: std::io::Error) -> Error {
     match error.kind() {
         ErrorKind::TimedOut | ErrorKind::WouldBlock => timeout_error(format!("timed out while reading from the peer: {error}")),
-        ErrorKind::UnexpectedEof => Error::new(ErrorCode::ProtocolError, "the peer closed the connection unexpectedly"),
+        ErrorKind::UnexpectedEof => Error::new(ErrorCode::ConnectionLost, "the peer closed the connection unexpectedly"),
         _ => Error::new(ErrorCode::Io, format!("read failed: {error}")),
     }
 }

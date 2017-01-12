@@ -35,6 +35,148 @@ const MAX_PACKET_SIZE: u32 = 32 * 1024;
 /// exhaust memory.
 const MAX_CAPTURE: usize = 8 * 1024 * 1024;
 
+/// One open session channel.
+pub(crate) struct Channel {
+    remote: u32,
+    closed: bool,
+}
+
+impl Channel {
+    /// Open a session channel.
+    pub(crate) fn open(transport: &mut Transport, failure: ErrorCode) -> Result<Self> {
+        let local_channel = 0u32;
+        let mut open = Writer::new(MSG_CHANNEL_OPEN);
+        open.string(b"session").u32(local_channel).u32(WINDOW_SIZE).u32(MAX_PACKET_SIZE);
+        transport.send(&open.finish())?;
+
+        let remote = loop {
+            let payload = match transport.receive() {
+                Ok(payload) => payload,
+                Err(error) => return Err(reconnect(error, failure)),
+            };
+            match payload[0] {
+                MSG_CHANNEL_OPEN_CONFIRMATION => {
+                    let mut reader = Reader::new(&payload);
+                    let _ = reader.byte()?;
+                    let recipient = reader.u32()?;
+                    if recipient != local_channel {
+                        return Err(Error::new(ErrorCode::ProtocolError, "server confirmed an unknown channel"));
+                    }
+                    break reader.u32()?;
+                }
+                MSG_CHANNEL_OPEN_FAILURE => {
+                    let mut reader = Reader::new(&payload);
+                    let _ = reader.byte()?;
+                    let _recipient = reader.u32()?;
+                    let reason = reader.u32()?;
+                    let description = reader.string().map(|bytes| String::from_utf8_lossy(bytes).into_owned()).unwrap_or_default();
+                    return Err(Error::new(failure, format!("the server refused to open a session channel (reason {reason}): {description}")));
+                }
+                MSG_GLOBAL_REQUEST => reply_global_failure(transport, &payload)?,
+                MSG_IGNORE | MSG_DEBUG | MSG_REQUEST_SUCCESS | MSG_REQUEST_FAILURE => continue,
+                MSG_DISCONNECT => return Err(disconnect(&payload, failure)),
+                other => return Err(unexpected(other, "CHANNEL_OPEN_CONFIRMATION")),
+            }
+        };
+        Ok(Self { remote, closed: false })
+    }
+
+    /// Send a `subsystem` request and wait for the server's verdict.
+    pub(crate) fn request_subsystem(&mut self, transport: &mut Transport, name: &str) -> Result<()> {
+        let mut request = Writer::new(MSG_CHANNEL_REQUEST);
+        request.u32(self.remote).string(b"subsystem").boolean(true).string(name.as_bytes());
+        transport.send(&request.finish())?;
+        self.await_verdict(transport, "subsystem")
+    }
+
+    /// Send an `exec` request and wait for the server's verdict.
+    pub(crate) fn request_exec(&mut self, transport: &mut Transport, command: &str) -> Result<()> {
+        let mut request = Writer::new(MSG_CHANNEL_REQUEST);
+        request.u32(self.remote).string(b"exec").boolean(true).string(command.as_bytes());
+        transport.send(&request.finish())?;
+        self.await_verdict(transport, "exec")
+    }
+
+    fn await_verdict(&mut self, transport: &mut Transport, kind: &str) -> Result<()> {
+        loop {
+            let payload = transport.receive()?;
+            match payload[0] {
+                MSG_CHANNEL_SUCCESS => return Ok(()),
+                MSG_CHANNEL_FAILURE => return Err(Error::new(ErrorCode::TransferFailed, format!("the server refused the {kind} request"))),
+                MSG_CHANNEL_WINDOW_ADJUST | MSG_IGNORE | MSG_DEBUG | MSG_REQUEST_SUCCESS | MSG_REQUEST_FAILURE => continue,
+                MSG_GLOBAL_REQUEST => reply_global_failure(transport, &payload)?,
+                MSG_DISCONNECT => return Err(disconnect(&payload, ErrorCode::TransferFailed)),
+                MSG_CHANNEL_CLOSE => {
+                    return Err(Error::new(
+                        ErrorCode::TransferFailed,
+                        format!("the server closed the channel before answering the {kind} request"),
+                    ));
+                }
+                other => return Err(unexpected(other, "CHANNEL_SUCCESS")),
+            }
+        }
+    }
+
+    /// Send one channel data packet.
+    pub(crate) fn send(&mut self, transport: &mut Transport, data: &[u8]) -> Result<()> {
+        let mut packet = Writer::new(MSG_CHANNEL_DATA);
+        packet.u32(self.remote).string(data);
+        transport.send(&packet.finish()).map_err(|error| reconnect(error, ErrorCode::ConnectionLost))
+    }
+
+    /// Receive the next data packet, or `None` once the server closed the channel.
+    pub(crate) fn receive(&mut self, transport: &mut Transport) -> Result<Option<Vec<u8>>> {
+        if self.closed {
+            return Ok(None);
+        }
+        loop {
+            let payload = match transport.receive() {
+                Ok(payload) => payload,
+                Err(error) => return Err(reconnect(error, ErrorCode::ConnectionLost)),
+            };
+            match payload[0] {
+                MSG_CHANNEL_DATA => {
+                    let mut reader = Reader::new(&payload);
+                    let _ = reader.byte()?;
+                    let _ = reader.u32()?;
+                    let data = reader.string()?.to_vec();
+                    let mut adjust = Writer::new(MSG_CHANNEL_WINDOW_ADJUST);
+                    adjust.u32(self.remote).u32(data.len() as u32);
+                    transport.send(&adjust.finish()).map_err(|error| reconnect(error, ErrorCode::ConnectionLost))?;
+                    return Ok(Some(data));
+                }
+                MSG_CHANNEL_EOF => continue,
+                MSG_CHANNEL_CLOSE => {
+                    self.closed = true;
+                    let mut close = Writer::new(MSG_CHANNEL_CLOSE);
+                    close.u32(self.remote);
+                    transport.send(&close.finish()).map_err(|error| reconnect(error, ErrorCode::ConnectionLost))?;
+                    return Ok(None);
+                }
+                MSG_CHANNEL_WINDOW_ADJUST | MSG_IGNORE | MSG_DEBUG | MSG_REQUEST_SUCCESS | MSG_REQUEST_FAILURE => continue,
+                MSG_GLOBAL_REQUEST => reply_global_failure(transport, &payload)?,
+                MSG_DISCONNECT => return Err(disconnect(&payload, ErrorCode::ConnectionLost)),
+                other => return Err(unexpected(other, "CHANNEL_DATA")),
+            }
+        }
+    }
+
+    /// Close the channel when the caller is done with it.
+    pub(crate) fn close(&mut self, transport: &mut Transport) -> Result<()> {
+        if self.closed {
+            return Ok(());
+        }
+        self.closed = true;
+        let mut close = Writer::new(MSG_CHANNEL_CLOSE);
+        close.u32(self.remote);
+        transport.send(&close.finish()).map_err(|error| reconnect(error, ErrorCode::ConnectionLost))
+    }
+}
+
+fn reconnect(error: Error, fallback: ErrorCode) -> Error {
+    if error.code() == ErrorCode::Io { Error::new(fallback, format!("the connection dropped: {}", error.message())) } else { error }
+}
+
 /// Result of one executed command.
 pub struct ExecOutcome {
     /// Captured standard output.
@@ -47,59 +189,14 @@ pub struct ExecOutcome {
 
 /// Open a session channel, run one command, and collect its output.
 pub fn exec(transport: &mut Transport, command: &str) -> Result<ExecOutcome> {
-    let local_channel = 0u32;
-    let mut open = Writer::new(MSG_CHANNEL_OPEN);
-    open.string(b"session").u32(local_channel).u32(WINDOW_SIZE).u32(MAX_PACKET_SIZE);
-    transport.send(&open.finish())?;
-
-    let remote_channel = loop {
-        let payload = transport.receive()?;
-        match payload[0] {
-            MSG_CHANNEL_OPEN_CONFIRMATION => {
-                let mut reader = Reader::new(&payload);
-                let _ = reader.byte()?;
-                let recipient = reader.u32()?;
-                if recipient != local_channel {
-                    return Err(Error::new(ErrorCode::ProtocolError, "server confirmed an unknown channel"));
-                }
-                break reader.u32()?;
-            }
-            MSG_CHANNEL_OPEN_FAILURE => {
-                let mut reader = Reader::new(&payload);
-                let _ = reader.byte()?;
-                let _recipient = reader.u32()?;
-                let reason = reader.u32()?;
-                let description = reader.string().map(|bytes| String::from_utf8_lossy(bytes).into_owned()).unwrap_or_default();
-                return Err(Error::new(
-                    ErrorCode::ExecFailed,
-                    format!("the server refused to open a session channel (reason {reason}): {description}"),
-                ));
-            }
-            MSG_GLOBAL_REQUEST => reply_global_failure(transport, &payload)?,
-            MSG_IGNORE | MSG_DEBUG | MSG_REQUEST_SUCCESS | MSG_REQUEST_FAILURE => continue,
-            MSG_DISCONNECT => return Err(disconnect(&payload)),
-            other => return Err(unexpected(other, "CHANNEL_OPEN_CONFIRMATION")),
-        }
-    };
-
-    let mut request = Writer::new(MSG_CHANNEL_REQUEST);
-    request.u32(remote_channel).string(b"exec").boolean(true).string(command.as_bytes());
-    transport.send(&request.finish())?;
+    let mut channel = Channel::open(transport, ErrorCode::ExecFailed)?;
+    channel.request_exec(transport, command)?;
+    let remote_channel = channel.remote;
 
     let mut outcome = ExecOutcome { stdout: Vec::new(), stderr: Vec::new(), exit_status: None };
-    let mut accepted = false;
     loop {
         let payload = transport.receive()?;
         match payload[0] {
-            MSG_CHANNEL_SUCCESS => {
-                let mut reader = Reader::new(&payload);
-                let _ = reader.byte()?;
-                let _ = reader.u32()?;
-                accepted = true;
-            }
-            MSG_CHANNEL_FAILURE => {
-                return Err(Error::new(ErrorCode::ExecFailed, "the server refused the exec request"));
-            }
             MSG_CHANNEL_DATA => {
                 let mut reader = Reader::new(&payload);
                 let _ = reader.byte()?;
@@ -140,7 +237,7 @@ pub fn exec(transport: &mut Transport, command: &str) -> Result<ExecOutcome> {
             MSG_CHANNEL_WINDOW_ADJUST => {}
             MSG_GLOBAL_REQUEST => reply_global_failure(transport, &payload)?,
             MSG_IGNORE | MSG_DEBUG | MSG_REQUEST_SUCCESS | MSG_REQUEST_FAILURE => {}
-            MSG_DISCONNECT => return Err(disconnect(&payload)),
+            MSG_DISCONNECT => return Err(disconnect(&payload, ErrorCode::ExecFailed)),
             other => {
                 let mut reply = Writer::new(MSG_UNIMPLEMENTED);
                 reply.u32(0);
@@ -150,9 +247,6 @@ pub fn exec(transport: &mut Transport, command: &str) -> Result<ExecOutcome> {
         }
     }
 
-    if !accepted {
-        return Err(Error::new(ErrorCode::ExecFailed, "the server closed the channel before accepting the exec request"));
-    }
     Ok(outcome)
 }
 
@@ -193,12 +287,12 @@ fn reply_global_failure(transport: &mut Transport, payload: &[u8]) -> Result<()>
     Ok(())
 }
 
-fn disconnect(payload: &[u8]) -> Error {
+fn disconnect(payload: &[u8], fallback: ErrorCode) -> Error {
     let mut reader = Reader::new(payload);
     let _ = reader.byte();
     let reason = reader.u32().unwrap_or(0);
     let description = reader.string().map(|bytes| String::from_utf8_lossy(bytes).into_owned()).unwrap_or_default();
-    Error::new(ErrorCode::ExecFailed, format!("the server disconnected during exec (reason {reason}): {description}"))
+    Error::new(fallback, format!("the server disconnected during the session (reason {reason}): {description}"))
 }
 
 fn unexpected(message: u8, expected: &str) -> Error {
