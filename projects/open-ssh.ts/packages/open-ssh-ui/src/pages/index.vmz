@@ -158,7 +158,7 @@ export default class IndexPage {
     statusTitle = "Status";
     emptyTitle = "No capability report yet";
     emptyDesc = "Refresh to read the capability matrix.";
-    note = "RDP carries connect, session, and drive redirection transfer only. It has no command channel, so `exec` stays not_implemented over RDP.";
+    note = "RDP carries connect and session only. It has no command channel, so `exec` stays not_implemented over RDP, and its transfer path needs drive redirection, which this round does not implement.";
     status = "";
     error = "";
     loadingCapabilities = false;

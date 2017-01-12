@@ -2,24 +2,26 @@
 
 Transport-aware remote host manager. Capabilities are defined by the goal
 (`connect`, `exec`, `transfer`, `session`), and protocol adapters are a separate
-dimension. `exec` runs one command over a real `ssh` connection. Every other
-domain capability still refuses with `not_implemented`, and no external `ssh`,
-`sftp`, `scp`, `mstsc`, or `winrs` process is ever started.
+dimension. `exec` runs one command over a real `ssh` connection. `transfer`
+uploads, downloads, and lists files over SFTP on that same connection. Every
+other domain capability still refuses with `not_implemented`, and no external
+`ssh`, `sftp`, `scp`, `mstsc`, or `winrs` process is ever started.
 
 ## Transports
 
 | Transport | connect | exec | transfer | session |
 |-----------|---------|------|----------|---------|
-| `ssh` | not implemented | supported | SFTP | not implemented |
-| `rdp` | not implemented | not available | drive redirection | not implemented |
+| `ssh` | not implemented | supported | supported (SFTP) | not implemented |
+| `rdp` | not implemented | not available | not available (drive redirection) | not implemented |
 
 RDP has no command channel, so `exec` over RDP is not available and stays
-`not_implemented`. The product does not guarantee that one port offers both
+`not_implemented`. RDP transfer needs drive redirection, which this round does
+not implement. The product does not guarantee that one port offers both
 connection and command execution. Availability depends on the transport.
 
-`exec` authenticates with a password or an unencrypted `ssh-ed25519` key and
-requires an explicit `SHA256:` host key pin. Host keys are never trusted on
-first use.
+`exec` and `transfer` authenticate with a password or an unencrypted
+`ssh-ed25519` key and require an explicit `SHA256:` host key pin. Host keys are
+never trusted on first use.
 
 ## Layout
 
@@ -68,13 +70,23 @@ open-ssh exec --transport ssh --host 10.0.0.5 --user deploy \
   --command "uname -a" --password-env OPEN_SSH_PASSWORD \
   --host-key-sha256 SHA256:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx --dry-run --json
 open-ssh exec --transport rdp --json
-open-ssh transfer --transport ssh --dry-run --json
+open-ssh transfer --host 10.0.0.5 --user deploy --direction upload \
+  --local ./build/app.tar --remote /srv/app.tar --resume --progress \
+  --identity ~/.ssh/id_ed25519 \
+  --host-key-sha256 SHA256:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx --json
+open-ssh transfer --host 10.0.0.5 --user deploy --direction list --remote /srv \
+  --identity ~/.ssh/id_ed25519 \
+  --host-key-sha256 SHA256:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx --json
+open-ssh transfer --transport ssh --direction upload --local ./app.tar --remote /srv/app.tar --dry-run --json
 open-ssh audit --kind agent --limit 20 --json
 ```
 
 `exec` writes captured stdout and stderr unchanged in human mode. The exact
 remote status is reported as `exitCode`, and the process exits `0` only when it
-is `0`.
+is `0`. `transfer` keeps human progress on stderr and reports the exact `bytes`,
+`resumedFrom`, and `durationMs` in the payload. Transfer failures keep distinct
+codes: `remote_not_found`, `permission_denied`, `disk_full`, `connection_lost`,
+`transfer_failed`, and `path_rejected`.
 
 Exit codes: `0` success, `1` failure, `2` usage, `3` capability unavailable,
 `4` canceled. `--json` emits `wae.cli-result/v0` envelopes.
