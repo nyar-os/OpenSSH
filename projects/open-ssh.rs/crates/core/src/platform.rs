@@ -97,13 +97,17 @@ const SKELETON_REASON: &str = "The skeleton round registers the capability but d
 type TransportSpec = (&'static str, Option<CapabilityState>, &'static str);
 
 const SUPPORTS: Option<CapabilityState> = None;
+const NO_CONNECT: Option<CapabilityState> = Some(CapabilityState::NotImplemented);
 const NO_EXEC: Option<CapabilityState> = Some(CapabilityState::NotImplemented);
 const NO_TRANSFER: Option<CapabilityState> = Some(CapabilityState::NotImplemented);
 const NO_PORT_FORWARD: Option<CapabilityState> = Some(CapabilityState::NotImplemented);
 const NO_KEYS: Option<CapabilityState> = Some(CapabilityState::NotImplemented);
 const NO_KNOWN_HOSTS: Option<CapabilityState> = Some(CapabilityState::NotImplemented);
 
-const CONNECT_TRANSPORTS: &[TransportSpec] = &[("ssh", SUPPORTS, "planned"), ("rdp", SUPPORTS, "planned")];
+const CONNECT_TRANSPORTS: &[TransportSpec] = &[
+    ("ssh", SUPPORTS, "Supported in-process with a pinned host key and a protocol-level disconnect."),
+    ("rdp", NO_CONNECT, "RDP negotiation is not implemented in this round, so no RDP connection can be established."),
+];
 const EXEC_TRANSPORTS: &[TransportSpec] = &[
     ("ssh", SUPPORTS, "Supported in-process with a pinned host key."),
     ("rdp", NO_EXEC, "RDP has no command channel. The protocol carries graphics, input, clipboard, and redirection channels only."),
@@ -138,9 +142,9 @@ struct DomainRow {
 const DOMAIN: &[DomainRow] = &[
     DomainRow {
         id: capability_ids::CONNECT,
-        state: Some(CapabilityState::NotImplemented),
-        reason: SKELETON_REASON,
-        detail: "Connect to a target and establish a session over the selected transport.",
+        state: None,
+        reason: "Available over the ssh transport. RDP negotiation is not implemented in this round.",
+        detail: "Connect to a target, verify the host key, authenticate, and report the negotiated session.",
         transports: CONNECT_TRANSPORTS,
     },
     DomainRow {
@@ -227,8 +231,8 @@ pub const fn platform() -> PlatformInfo {
     PlatformInfo { os: std::env::consts::OS, arch: std::env::consts::ARCH }
 }
 
-/// Build the capability report. `exec` and `transfer` are available over
-/// `ssh`. Every other domain row stays unavailable in this round.
+/// Build the capability report. `connect`, `exec`, and `transfer` are available
+/// over `ssh`. Every other domain row stays unavailable in this round.
 pub fn capabilities() -> CapabilitiesReport {
     let mut items = Vec::with_capacity(DOMAIN.len() + META.len());
     for (id, detail) in META {
@@ -256,11 +260,11 @@ pub fn capabilities() -> CapabilitiesReport {
         transports: TRANSPORTS.to_vec(),
         items,
         notes: vec![
-            "`exec` and `transfer` are available over `ssh`. Every other domain capability stays not_implemented in this round.",
+            "`connect`, `exec`, and `transfer` are available over `ssh`. Every other domain capability stays not_implemented in this round.",
             "Capability, version, audit, and GUI meta capabilities are available.",
             "Capability ids describe a goal. Transport support is reported per row and never encoded in the id.",
-            "RDP supports connect and session. It has no command channel, so `exec` is not_implemented, and its transfer path needs drive redirection.",
-            "`exec` and `transfer` require an explicit host key pin. An unknown or mismatched host key fails instead of being trusted.",
+            "RDP supports neither connect nor session yet, because RDP negotiation is not implemented. It has no command channel, so `exec` is not_implemented, and its transfer path needs drive redirection.",
+            "`connect`, `exec`, and `transfer` require an explicit host key pin. An unknown or mismatched host key fails instead of being trusted.",
             "No capability may fall back to an external ssh, sftp, scp, mstsc, or winrs process.",
         ],
     }

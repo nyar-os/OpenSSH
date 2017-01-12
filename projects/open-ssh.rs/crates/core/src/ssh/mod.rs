@@ -8,6 +8,7 @@
 
 mod auth;
 mod channel;
+mod connect;
 #[cfg(test)]
 mod fixture;
 mod identity;
@@ -17,6 +18,7 @@ mod transfer;
 mod transport;
 mod wire;
 
+pub use connect::{ConnectPreview, ConnectRequest, ConnectResult, execute as connect, preview as connect_preview};
 pub use transfer::{
     Progress, TransferDirection, TransferEntry, TransferPreview, TransferRequest, TransferResult, execute as transfer,
     execute_with as transfer_with, normalize_local_path, normalize_remote_path, preview as transfer_preview,

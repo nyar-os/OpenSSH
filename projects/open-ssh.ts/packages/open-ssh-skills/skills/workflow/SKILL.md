@@ -1,6 +1,6 @@
 ---
 name: workflow
-description: Drive the transport-neutral OpenSSH CLI to read the capability matrix, run one command over SSH, and upload, download, or list files over SFTP.
+description: Drive the transport-neutral OpenSSH CLI to read the capability matrix, verify a connection, run one command over SSH, and upload, download, or list files over SFTP.
 ---
 
 # OpenSSH agent workflow
@@ -43,11 +43,21 @@ from a capability id. Read the per-transport rows in the report.
 
    `open-ssh session --transport=<ssh|rdp> --json`
 
+4. Verify one target without running a command. `connect` opens the transport,
+   checks the pinned host key, authenticates, and disconnects.
+
+   `open-ssh connect --transport=ssh --host=<host> --user=<user> --identity=<path> --host-key-sha256=<SHA256:...> --dry-run --json`
+
+5. Read `data.serverVersion`, `data.hostKeySha256`, `data.kexAlgorithm`,
+   `data.hostKeyAlgorithm`, `data.cipher`, `data.mac`, and `data.durationMs`.
+   RDP negotiation is not implemented, so `--transport=rdp` is refused. `connect`
+   is a probe, not a shell: it never starts an interactive session.
+
 ## Command execution over SSH
 
-`exec` and `transfer` are the available domain capabilities. Both need an
-explicit host key pin; the product never trusts an unknown key and never offers
-TOFU.
+`connect`, `exec`, and `transfer` are the available domain capabilities. All
+three need an explicit host key pin; the product never trusts an unknown key and
+never offers TOFU.
 
 6. Preview first. The preview resolves the target and the pin without opening a
    connection.
@@ -107,9 +117,10 @@ id and the transport as separate fields. Use `--actor-kind agent` and a stable
 
 ## Safety
 
-- `exec` and `transfer` are available over `ssh` only. Every other domain
-  capability refuses with `not_implemented`. A refusal is not a success. Do not
-  fall back to an external `ssh`, `sftp`, `scp`, `mstsc`, or `winrs` process.
+- `connect`, `exec`, and `transfer` are available over `ssh` only. Every other
+  domain capability refuses with `not_implemented`. A refusal is not a success.
+  Do not fall back to an external `ssh`, `sftp`, `scp`, `mstsc`, or `winrs`
+  process.
 - Do not execute a mutating command without explicit confirmation（确认）from the
   user after the dry-run preview.
 - Do not retry a structured capability failure with elevated privileges. Report

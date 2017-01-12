@@ -100,6 +100,50 @@ export interface OkResult {
 /** Authentication method used by one `exec` call. */
 export type ExecAuthMethod = 'password' | 'publickey';
 
+/** One `connect` request. `ssh` is the only transport that carries it. */
+export interface ConnectRequest {
+    transport?: Transport;
+    host: string;
+    port?: number;
+    user: string;
+    /** Remote password. Mutually exclusive with `identityPath`. */
+    password?: string;
+    /** Path to an unencrypted `ssh-ed25519` private key. */
+    identityPath?: string;
+    /** Required `SHA256:` host key fingerprint. */
+    hostKeySha256?: string;
+    timeoutMs?: number;
+}
+
+/** Result of one successful `connect` call. */
+export interface ConnectResult {
+    transport: 'ssh';
+    hostHash: string;
+    port: number;
+    user: string;
+    authMethod: ExecAuthMethod;
+    /** Server identification string without the trailing CRLF. */
+    serverVersion: string;
+    /** Verified `SHA256:` host key fingerprint. */
+    hostKeySha256: string;
+    kexAlgorithm: string;
+    hostKeyAlgorithm: string;
+    cipher: string;
+    mac: string;
+    durationMs: number;
+}
+
+/** What a `--dry-run` `connect` resolves without connecting. */
+export interface ConnectPreview {
+    transport: 'ssh';
+    hostHash: string;
+    port: number;
+    user: string;
+    authMethod: ExecAuthMethod;
+    hostKeySha256: string;
+    timeoutMs: number;
+}
+
 /** One `exec` request. `ssh` is the only transport that carries it. */
 export interface ExecRequest {
     transport?: Transport;
@@ -234,6 +278,19 @@ export function capabilities(): CapabilitiesReport {
 }
 
 /**
+ * Connect, verify the pinned host key, authenticate, and disconnect.
+ *
+ * The call proves the target and the credentials and reports the negotiated
+ * session without running a command. `dryRun` resolves the same request without
+ * opening a connection and returns a {@link ConnectPreview}.
+ */
+export function connect(request: ConnectRequest & { dryRun: true }): ConnectPreview;
+export function connect(request: ConnectRequest & { dryRun?: false }): ConnectResult;
+export function connect(request: ConnectRequest & { dryRun?: boolean }): ConnectResult | ConnectPreview {
+    return invoke(() => loadNative().connect({ ...request }) as ConnectResult | ConnectPreview);
+}
+
+/**
  * Run one command over `ssh` and return its captured output.
  *
  * `dryRun` resolves the same request without opening a connection and returns
@@ -268,9 +325,9 @@ export function transfer(request: TransferRequest & { dryRun?: boolean }): Trans
  * selects a more precise refusal, for example `exec` over `rdp` reports that RDP
  * has no command channel.
  *
- * `exec` and `transfer` are the available domain capabilities and have their
- * own exports. Every other capability still refuses with its stable code.
- * Callers must not treat an exception here as a successful result.
+ * `connect`, `exec`, and `transfer` are the available domain capabilities and
+ * have their own exports. Every other capability still refuses with its stable
+ * code. Callers must not treat an exception here as a successful result.
  */
 export function invokeCapability<T = unknown>(capability: string, transport?: Transport): T {
     return invoke(() => loadNative().invoke(capability, transport) as T);
