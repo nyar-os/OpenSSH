@@ -17,7 +17,7 @@ use open_ssh_core::{
     CapabilityState, Error as CoreError, ErrorCode,
     audit::capability_ids,
     platform::{CapabilityItem, capabilities as core_capabilities, platform as core_platform},
-    ssh::{self, ExecAuth, ExecRequest, ExecResult},
+    ssh::{self, ExecAuth, ExecRequest, ExecResult, Progress, TransferDirection, TransferRequest, TransferResult},
 };
 use serde_json::{Value, json};
 use wae::{
@@ -310,8 +310,37 @@ fn optional_bool_prop(obj: JsValue, name: &str) -> Result<Option<bool>> {
 fn required_string(obj: JsValue, name: &str) -> Result<String> {
     match optional_string_prop(obj, name)? {
         Some(value) if !value.trim().is_empty() => Ok(value),
-        _ => Err(usage(format!("exec requires `{name}`"))),
+        _ => Err(usage(format!("`{name}` is required"))),
     }
+}
+
+/// Connection and authentication fields shared by `exec` and `transfer`.
+struct Endpoint {
+    port: u16,
+    timeout: Duration,
+    auth: ExecAuth,
+}
+
+fn endpoint(obj: JsValue) -> Result<Endpoint> {
+    let port = match optional_i64(obj, "port")? {
+        Some(value) if (1..=65535).contains(&value) => value as u16,
+        Some(_) => return Err(usage("`port` must be between 1 and 65535")),
+        None => 22,
+    };
+    let timeout_ms = match optional_i64(obj, "timeoutMs")? {
+        Some(value) if value > 0 => value as u64,
+        Some(_) => return Err(usage("`timeoutMs` must be greater than zero")),
+        None => 30_000,
+    };
+    let password = optional_string_prop(obj, "password")?;
+    let identity_path = optional_string_prop(obj, "identityPath")?;
+    let auth = match (password, identity_path) {
+        (Some(password), None) if !password.is_empty() => ExecAuth::Password(password),
+        (None, Some(path)) if !path.trim().is_empty() => ExecAuth::Identity(PathBuf::from(path)),
+        (Some(_), Some(_)) => return Err(usage("pass either `password` or `identityPath`, never both")),
+        _ => return Err(usage("this call requires `password` or `identityPath`")),
+    };
+    Ok(Endpoint { port, timeout: Duration::from_millis(timeout_ms), auth })
 }
 
 fn exec_request(arg: JsValue) -> Result<ExecRequest> {
@@ -320,25 +349,8 @@ fn exec_request(arg: JsValue) -> Result<ExecRequest> {
     let user = required_string(arg, "user")?;
     let command = required_string(arg, "command")?;
     let host_key_sha256 = optional_string_prop(arg, "hostKeySha256")?.unwrap_or_default();
-    let port = match optional_i64(arg, "port")? {
-        Some(value) if (1..=65535).contains(&value) => value as u16,
-        Some(_) => return Err(usage("`port` must be between 1 and 65535")),
-        None => 22,
-    };
-    let timeout_ms = match optional_i64(arg, "timeoutMs")? {
-        Some(value) if value > 0 => value as u64,
-        Some(_) => return Err(usage("`timeoutMs` must be greater than zero")),
-        None => 30_000,
-    };
-    let password = optional_string_prop(arg, "password")?;
-    let identity_path = optional_string_prop(arg, "identityPath")?;
-    let auth = match (password, identity_path) {
-        (Some(password), None) if !password.is_empty() => ExecAuth::Password(password),
-        (None, Some(path)) if !path.trim().is_empty() => ExecAuth::Identity(PathBuf::from(path)),
-        (Some(_), Some(_)) => return Err(usage("pass either `password` or `identityPath`, never both")),
-        _ => return Err(usage("exec requires `password` or `identityPath`")),
-    };
-    Ok(ExecRequest { transport, host, port, user, command, auth, host_key_sha256, timeout: Duration::from_millis(timeout_ms) })
+    let Endpoint { port, timeout, auth } = endpoint(arg)?;
+    Ok(ExecRequest { transport, host, port, user, command, auth, host_key_sha256, timeout })
 }
 
 /// Run one command over the `ssh` transport.
@@ -388,6 +400,100 @@ fn exec(ctx: CallContext) -> Result<JsValue> {
     match result {
         Ok(outcome) => value_to_js(&ctx, &outcome),
         Err(error) => Err(core_error(error)),
+    }
+}
+
+fn transfer_request(arg: JsValue) -> Result<TransferRequest> {
+    let transport = optional_string_prop(arg, "transport")?.unwrap_or_else(|| "ssh".to_string());
+    let host = required_string(arg, "host")?;
+    let user = required_string(arg, "user")?;
+    let direction = match optional_string_prop(arg, "direction")?.as_deref() {
+        Some("upload") => TransferDirection::Upload,
+        Some("download") => TransferDirection::Download,
+        Some("list") => TransferDirection::List,
+        Some(other) => return Err(usage(format!("unknown `direction` `{other}`"))),
+        None => return Err(usage("`direction` must be `upload`, `download`, or `list`")),
+    };
+    let remote_path = required_string(arg, "remotePath")?;
+    let local_path = optional_string_prop(arg, "localPath")?.map(PathBuf::from);
+    let resume = optional_bool_prop(arg, "resume")?.unwrap_or(false);
+    let host_key_sha256 = optional_string_prop(arg, "hostKeySha256")?.unwrap_or_default();
+    let Endpoint { port, timeout, auth } = endpoint(arg)?;
+    Ok(TransferRequest { transport, host, port, user, auth, host_key_sha256, timeout, direction, local_path, remote_path, resume })
+}
+
+/// Upload, download, or list files over the `ssh` transport.
+///
+/// Audit params carry the direction, target, and auth method. They never carry
+/// file contents, and the result adds the exact byte count, the resume offset,
+/// and the wall-clock duration.
+#[function]
+fn transfer(ctx: CallContext) -> Result<JsValue> {
+    let arg = object_arg(&ctx)?.ok_or_else(|| usage("transfer requires an options object"))?;
+    let request = transfer_request(arg)?;
+    let dry_run = optional_bool_prop(arg, "dryRun")?.unwrap_or(false);
+    let show_progress = optional_bool_prop(arg, "progress")?.unwrap_or(false);
+    let params = json!({
+        "transport": &request.transport,
+        "hostHash": ssh::host_hash(&request.host),
+        "port": request.port,
+        "user": &request.user,
+        "authMethod": request.auth.name(),
+        "hostKeySha256": &request.host_key_sha256,
+        "direction": request.direction.name(),
+        "resume": request.resume,
+    });
+
+    if dry_run {
+        let result = audit::run(capability_ids::TRANSFER, Mode::DryRun, params, || {
+            let preview = ssh::transfer_preview(&request)?;
+            Ok((preview, Summary::new(1, format!("ssh transfer preview for host {}", ssh::host_hash(&request.host)))))
+        });
+        return match result {
+            Ok(preview) => value_to_js(&ctx, &preview),
+            Err(error) => Err(core_error(error)),
+        };
+    }
+
+    let summary_host = ssh::host_hash(&request.host);
+    let port = request.port;
+    let user = request.user.clone();
+    let direction = request.direction.name();
+    let result = audit::run_metered(capability_ids::TRANSFER, Mode::Execute, params, move || {
+        let mut bucket = u64::MAX;
+        let outcome: TransferResult = ssh::transfer_with(request, |update| {
+            if show_progress {
+                report_progress(update, &mut bucket);
+            }
+        })?;
+        let extra = json!({
+            "bytes": outcome.bytes,
+            "resumedFrom": outcome.resumed_from,
+            "durationMs": outcome.duration_ms,
+            "entries": outcome.entries.len(),
+        });
+        let summary = format!("ssh {direction} on host {summary_host}:{port} as {user}");
+        Ok((outcome, extra, Summary::new(1, summary)))
+    });
+    match result {
+        Ok(outcome) => value_to_js(&ctx, &outcome),
+        Err(error) => Err(core_error(error)),
+    }
+}
+
+/// Print human-readable progress to stderr in ten-percent steps.
+fn report_progress(update: Progress, bucket: &mut u64) {
+    let next = match update.total {
+        Some(total) if total > 0 => update.transferred.saturating_mul(10) / total,
+        _ => update.transferred / (1024 * 1024),
+    };
+    if next == *bucket {
+        return;
+    }
+    *bucket = next;
+    match update.total {
+        Some(total) => eprintln!("transfer: {}% ({} of {} bytes)", next * 10, update.transferred, total),
+        None => eprintln!("transfer: {} bytes", update.transferred),
     }
 }
 
@@ -502,6 +608,7 @@ register_module![
     version,
     capabilities,
     exec,
+    transfer,
     invoke,
     cli_contract,
     open_gui,
@@ -559,9 +666,11 @@ mod tests {
 
     #[test]
     fn invoke_points_available_capabilities_at_their_export() {
-        let error = invoke_error(capability_ids::EXEC, None);
-        assert_eq!(error.code(), ErrorCode::InvalidArgument);
-        assert!(error.message().contains("dedicated export"));
+        for id in [capability_ids::EXEC, capability_ids::TRANSFER] {
+            let error = invoke_error(id, None);
+            assert_eq!(error.code(), ErrorCode::InvalidArgument);
+            assert!(error.message().contains("dedicated export"), "`{id}` must point at its dedicated export");
+        }
     }
 
     #[test]
