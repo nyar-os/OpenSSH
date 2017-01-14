@@ -16,10 +16,14 @@ implements the SSH transport in-process: packet framing, negotiation,
 `curve25519-sha256` key exchange, host key verification, user authentication,
 and the session channel. Only cryptographic primitives come from crates.
 
-`exec` is available over `ssh`. Every other domain capability is registered as
-`not_implemented` with a stable code so no caller can mistake an unimplemented
-path for a successful one. Host keys are never trusted on first use: `exec`
-requires an explicit `SHA256:` pin.
+`connect`, `exec`, and `transfer` are available over `ssh`. `connect` proves the
+target, the pinned host key, and the credentials and reports the negotiated
+session. `transfer` uploads, downloads, and lists files over SFTP on the same
+connection, and an interrupted transfer resumes from the exact byte that landed.
+Every other domain capability is registered as `not_implemented` with a stable
+code so no caller can mistake an unimplemented path for a successful one. Host
+keys are never trusted on first use: all three require an explicit `SHA256:`
+pin.
 
 ## Capability states
 

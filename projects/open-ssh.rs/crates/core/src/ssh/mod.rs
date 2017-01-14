@@ -540,6 +540,51 @@ mod tests {
     }
 
     #[test]
+    fn an_interrupted_download_reports_connection_lost_and_resumes() {
+        let contents: Vec<u8> = (0..40_000u32).map(|index| (index % 251) as u8).collect();
+        let fixture = sftp_fixture(fixture::FixtureOptions {
+            connections: 2,
+            files: vec![("/incoming/big.bin", contents.clone())],
+            drop_after_read: Some(16_384),
+            ..Default::default()
+        });
+        let local = temp_path("download-resume.bin");
+
+        let first = transfer(transfer_request(&fixture, TransferDirection::Download, Some(local.clone()), "/incoming/big.bin"));
+        let error = first.expect_err("the fixture drops the first connection");
+        assert_eq!(error.code(), ErrorCode::ConnectionLost, "{}", error.message());
+        let partial = std::fs::metadata(&local).expect("the partial download exists").len();
+        assert!(partial > 0 && partial < contents.len() as u64, "partial size was {partial}");
+        assert_eq!(std::fs::read(&local).expect("the partial download"), contents[..partial as usize]);
+
+        let mut resume = transfer_request(&fixture, TransferDirection::Download, Some(local.clone()), "/incoming/big.bin");
+        resume.resume = true;
+        let result = transfer(resume).expect("resume the download");
+
+        assert_eq!(result.resumed_from, partial, "the second attempt continues from the partial file");
+        assert_eq!(result.bytes, contents.len() as u64 - partial);
+        assert_eq!(std::fs::read(&local).expect("the completed download"), contents);
+        let _ = std::fs::remove_file(&local);
+        fixture.wait();
+    }
+
+    #[test]
+    fn a_resumed_upload_refuses_a_remote_file_larger_than_the_source() {
+        let fixture = sftp_fixture(fixture::FixtureOptions { files: vec![("/incoming/data.bin", vec![9u8; 500])], ..Default::default() });
+        let local = temp_path("shorter-than-remote.bin");
+        std::fs::write(&local, vec![1u8; 100]).expect("write the local file");
+
+        let mut request = transfer_request(&fixture, TransferDirection::Upload, Some(local.clone()), "/incoming/data.bin");
+        request.resume = true;
+        let error = transfer(request).expect_err("a larger remote file must not be reported as a completed resume");
+        assert_eq!(error.code(), ErrorCode::TransferFailed, "{}", error.message());
+        assert!(error.message().contains("cannot be resumed"), "{}", error.message());
+        assert_eq!(fixture.file("/incoming/data.bin"), Some(vec![9u8; 500]));
+        let _ = std::fs::remove_file(&local);
+        fixture.wait();
+    }
+
+    #[test]
     fn missing_remote_files_report_remote_not_found() {
         let fixture = sftp_fixture(fixture::FixtureOptions::default());
         let local = temp_path("missing.bin");

@@ -88,6 +88,8 @@ pub(crate) struct FixtureOptions {
     pub(crate) directories: Vec<&'static str>,
     /// Drop the first connection once this many bytes were written.
     pub(crate) drop_after_write: Option<u64>,
+    /// Drop the first connection once this many bytes were read.
+    pub(crate) drop_after_read: Option<u64>,
     /// Paths that answer with `SSH_FX_PERMISSION_DENIED`.
     pub(crate) deny: Vec<&'static str>,
     /// Answer every write with `SSH_FX_FAILURE` and a disk-full message.
@@ -104,6 +106,7 @@ impl Default for FixtureOptions {
             files: Vec::new(),
             directories: Vec::new(),
             drop_after_write: None,
+            drop_after_read: None,
             deny: Vec::new(),
             disk_full: false,
         }
@@ -146,7 +149,7 @@ impl Fixture {
         let connections = options.connections.max(1);
 
         let server = thread::spawn(move || {
-            let mut state = SftpState { files: shared_files, directories, handles: BTreeMap::new(), next_handle: 1, written: 0 };
+            let mut state = SftpState { files: shared_files, directories, handles: BTreeMap::new(), next_handle: 1, written: 0, read: 0 };
             for index in 0..connections {
                 let Ok((stream, _)) = listener.accept()
                 else {
@@ -443,6 +446,7 @@ struct SftpState {
     handles: BTreeMap<Vec<u8>, Handle>,
     next_handle: u32,
     written: u64,
+    read: u64,
 }
 
 impl SftpState {
@@ -461,6 +465,7 @@ impl SftpState {
 
 fn serve_sftp(transport: &mut Transport, channel: u32, options: &FixtureOptions, index: usize, state: &mut SftpState) -> Result<()> {
     state.written = 0;
+    state.read = 0;
     let mut inbound = Vec::new();
     while let Some(packet) = read_packet(transport, &mut inbound)? {
         if packet.len() < 5 {
@@ -530,20 +535,30 @@ fn serve_sftp(transport: &mut Transport, channel: u32, options: &FixtureOptions,
                     status(transport, channel, id, STATUS_PERMISSION_DENIED, "Permission denied")?;
                     continue;
                 }
+                // Drop on the request after the byte budget, so the client has
+                // already consumed and written the bytes it was sent.
+                if index == 0 && options.drop_after_read.is_some_and(|limit| state.read >= limit) {
+                    return Err(protocol("the fixture dropped the connection on purpose"));
+                }
                 let files = state.files();
                 let Some(data) = files.get(&path)
                 else {
+                    drop(files);
                     status(transport, channel, id, STATUS_NO_SUCH_FILE, "No such file")?;
                     continue;
                 };
                 if offset >= data.len() {
+                    drop(files);
                     status(transport, channel, id, STATUS_EOF, "EOF")?;
                     continue;
                 }
                 let end = offset.saturating_add(limit).min(data.len());
+                let payload = data[offset..end].to_vec();
+                drop(files);
                 let mut writer = Writer::new(MSG_DATA);
-                writer.u32(id).string(&data[offset..end]);
+                writer.u32(id).string(&payload);
                 send_packet(transport, channel, &writer.finish())?;
+                state.read += payload.len() as u64;
             }
             6 => {
                 let handle = reader.string()?.to_vec();
