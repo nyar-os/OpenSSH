@@ -21,9 +21,9 @@ use crate::errors::{Error, ErrorCode};
 
 use super::{
     Result,
-    kex::{derive, exchange_hash, fingerprint_of},
+    kex::{derive, exchange_hash, fingerprint_of, shared_secret_mpint},
     transport::{AesGcmState, Transport},
-    wire::{Reader, Writer, encode_mpint},
+    wire::{Reader, Writer},
 };
 
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -253,9 +253,8 @@ fn handshake(transport: &mut Transport, host_key: &SigningKey) -> Result<()> {
     getrandom::fill(&mut seed).map_err(|error| Error::new(ErrorCode::Internal, error.to_string()))?;
     let secret = StaticSecret::from(seed);
     let server_public = PublicKey::from(&secret).to_bytes();
-    let mut shared = secret.diffie_hellman(&PublicKey::from(client_array)).to_bytes();
-    shared.reverse();
-    let shared_mpint = encode_mpint(&shared);
+    let shared = secret.diffie_hellman(&PublicKey::from(client_array)).to_bytes();
+    let shared_mpint = shared_secret_mpint(&shared);
 
     let host_blob = host_key_blob(host_key);
     let hash = exchange_hash(transport, &host_blob, &client_public, &server_public, &shared_mpint)?;

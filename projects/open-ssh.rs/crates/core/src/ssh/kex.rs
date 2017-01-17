@@ -93,9 +93,7 @@ pub fn handshake(transport: &mut Transport) -> Result<Handshake> {
     server_public_bytes.copy_from_slice(server_public);
 
     let shared = secret.diffie_hellman(&PublicKey::from(server_public_bytes));
-    let mut shared_big_endian = shared.to_bytes();
-    shared_big_endian.reverse();
-    let shared_mpint = encode_mpint(&shared_big_endian);
+    let shared_mpint = shared_secret_mpint(&shared.to_bytes());
 
     let exchange_hash = exchange_hash(transport, &host_key, client_public.as_bytes(), &server_public_bytes, &shared_mpint)?;
     verify_signature(&host_key, signature, &exchange_hash)?;
@@ -217,6 +215,25 @@ fn ephemeral_secret() -> Result<StaticSecret> {
     Ok(StaticSecret::from(bytes))
 }
 
+/// Encode the raw X25519 output as the SSH `mpint` `K`.
+pub(crate) fn shared_secret_mpint(raw: &[u8; 32]) -> Vec<u8> {
+    let mut bytes = *raw;
+    bytes.reverse();
+    encode_mpint(&bytes)
+}
+
+/// The inputs of `H = SHA256(V_C || V_S || I_C || I_S || K_S || e || f || K)`.
+pub(crate) struct ExchangeHashInputs<'a> {
+    pub(crate) client_version: &'a [u8],
+    pub(crate) server_version: &'a [u8],
+    pub(crate) client_kexinit: &'a [u8],
+    pub(crate) server_kexinit: &'a [u8],
+    pub(crate) host_key: &'a [u8],
+    pub(crate) client_public: &'a [u8],
+    pub(crate) server_public: &'a [u8],
+    pub(crate) shared_mpint: &'a [u8],
+}
+
 pub(crate) fn exchange_hash(
     transport: &Transport,
     host_key: &[u8],
@@ -224,16 +241,30 @@ pub(crate) fn exchange_hash(
     server_public: &[u8],
     shared_mpint: &[u8],
 ) -> Result<Vec<u8>> {
+    Ok(exchange_hash_of(&ExchangeHashInputs {
+        client_version: transport.client_version().as_bytes(),
+        server_version: transport.server_version().as_bytes(),
+        client_kexinit: transport.client_kexinit(),
+        server_kexinit: transport.server_kexinit(),
+        host_key,
+        client_public,
+        server_public,
+        shared_mpint,
+    }))
+}
+
+/// `H` from inputs that were separated from a live transport.
+pub(crate) fn exchange_hash_of(inputs: &ExchangeHashInputs<'_>) -> Vec<u8> {
     let mut hasher = Sha256::new();
-    put_string(&mut hasher, transport.client_version().as_bytes());
-    put_string(&mut hasher, transport.server_version().as_bytes());
-    put_string(&mut hasher, transport.client_kexinit());
-    put_string(&mut hasher, transport.server_kexinit());
-    put_string(&mut hasher, host_key);
-    put_string(&mut hasher, client_public);
-    put_string(&mut hasher, server_public);
-    put_string(&mut hasher, shared_mpint);
-    Ok(hasher.finalize().to_vec())
+    put_string(&mut hasher, inputs.client_version);
+    put_string(&mut hasher, inputs.server_version);
+    put_string(&mut hasher, inputs.client_kexinit);
+    put_string(&mut hasher, inputs.server_kexinit);
+    put_string(&mut hasher, inputs.host_key);
+    put_string(&mut hasher, inputs.client_public);
+    put_string(&mut hasher, inputs.server_public);
+    put_string(&mut hasher, inputs.shared_mpint);
+    hasher.finalize().to_vec()
 }
 
 fn put_string(hasher: &mut Sha256, bytes: &[u8]) {
@@ -299,4 +330,108 @@ fn disconnected(payload: &[u8]) -> Error {
 
 fn unexpected(message: u8, expected: &str) -> Error {
     Error::new(ErrorCode::ProtocolError, format!("expected `{expected}` but the server sent SSH message {message}"))
+}
+
+#[cfg(test)]
+mod trace {
+    use std::time::Duration;
+
+    use super::*;
+
+    fn env(name: &str) -> Option<String> {
+        std::env::var(name).ok().map(|value| value.trim().to_string()).filter(|value| !value.is_empty())
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    fn report(label: &str, bytes: &[u8]) {
+        println!("{label} len={} hex={}", bytes.len(), hex(bytes));
+    }
+
+    fn expect_message(transport: &mut Transport, expected: u8, name: &str) -> Result<Vec<u8>> {
+        loop {
+            let payload = transport.receive()?;
+            match payload[0] {
+                value if value == expected => return Ok(payload),
+                MSG_IGNORE | MSG_DEBUG => continue,
+                MSG_DISCONNECT => return Err(disconnected(&payload)),
+                other => return Err(unexpected(other, name)),
+            }
+        }
+    }
+
+    /// Dump the eight exchange hash inputs, `H`, and the signature verdict for
+    /// one real server. Test-only: nothing here is compiled into a release.
+    ///
+    /// ```text
+    /// OPEN_SSH_KEX_TRACE_HOST=... OPEN_SSH_KEX_TRACE_PORT=22 \
+    /// OPEN_SSH_KEX_TRACE_PIN=SHA256:... \
+    ///   cargo test -p open-ssh-core --lib ssh::kex::trace -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "requires a reachable SSH server in the `OPEN_SSH_KEX_TRACE_*` variables"]
+    fn dump_key_exchange_inputs() {
+        let Some(host) = env("OPEN_SSH_KEX_TRACE_HOST")
+        else {
+            eprintln!("no `OPEN_SSH_KEX_TRACE_HOST` is set, so there is nothing to trace");
+            return;
+        };
+        let port = env("OPEN_SSH_KEX_TRACE_PORT").map_or(22, |value| value.parse::<u16>().expect("`OPEN_SSH_KEX_TRACE_PORT` must be a port"));
+        let pin = env("OPEN_SSH_KEX_TRACE_PIN");
+
+        let mut transport = Transport::connect(&host, port, Duration::from_secs(30)).expect("connect");
+        transport.exchange_versions().expect("version exchange");
+
+        let client_kexinit = client_kexinit().expect("client KEXINIT");
+        transport.send(&client_kexinit).expect("send KEXINIT");
+        let server_kexinit = expect_message(&mut transport, MSG_KEXINIT, "KEXINIT").expect("receive KEXINIT");
+        transport.remember_kexinit(client_kexinit, server_kexinit.clone());
+        let offered = Offered::parse(&server_kexinit).expect("parse KEXINIT");
+        offered.require().expect("negotiate");
+        if offered.first_kex_packet_follows
+            && (offered.first_kex.as_deref() != Some(KEX_ALGORITHM) || offered.first_host_key.as_deref() != Some(HOST_KEY_ALGORITHM))
+        {
+            let _ = transport.receive().expect("discard the guessed packet");
+        }
+
+        let secret = ephemeral_secret().expect("ephemeral secret");
+        let client_public = PublicKey::from(&secret);
+        let mut init = Writer::new(MSG_KEX_ECDH_INIT);
+        init.string(client_public.as_bytes());
+        transport.send(&init.finish()).expect("send KEX_ECDH_INIT");
+
+        let reply = expect_message(&mut transport, MSG_KEX_ECDH_REPLY, "KEX_ECDH_REPLY").expect("receive KEX_ECDH_REPLY");
+        let mut reader = Reader::new(&reply);
+        let _ = reader.byte().expect("message number");
+        let host_key = reader.string().expect("host key").to_vec();
+        let server_public = reader.string().expect("server public key").to_vec();
+        let signature = reader.string().expect("signature").to_vec();
+        let server_public_bytes: [u8; 32] = server_public.as_slice().try_into().expect("32 byte server public key");
+
+        let shared = secret.diffie_hellman(&PublicKey::from(server_public_bytes)).to_bytes();
+        let shared_mpint = shared_secret_mpint(&shared);
+        let hash = exchange_hash(&transport, &host_key, client_public.as_bytes(), &server_public_bytes, &shared_mpint).expect("exchange hash");
+
+        println!("target host fingerprint {}", fingerprint_of(&host_key));
+        if let Some(expected) = pin {
+            assert_eq!(fingerprint_of(&host_key), expected, "the server does not present the pinned host key");
+        }
+        report("V_C", transport.client_version().as_bytes());
+        report("V_S", transport.server_version().as_bytes());
+        report("I_C", transport.client_kexinit());
+        report("I_S", transport.server_kexinit());
+        report("K_S", &host_key);
+        report("e", client_public.as_bytes());
+        report("f", &server_public);
+        report("shared_raw", &shared);
+        report("K", &shared_mpint);
+        report("signature", &signature);
+        report("H", &hash);
+        match verify_signature(&host_key, &signature, &hash) {
+            Ok(()) => println!("signature verification: OK"),
+            Err(error) => println!("signature verification: FAILED ({}: {})", error.code(), error.message()),
+        }
+    }
 }
