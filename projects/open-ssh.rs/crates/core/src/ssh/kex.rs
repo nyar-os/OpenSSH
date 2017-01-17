@@ -216,10 +216,12 @@ fn ephemeral_secret() -> Result<StaticSecret> {
 }
 
 /// Encode the raw X25519 output as the SSH `mpint` `K`.
+///
+/// RFC 8731 section 3.1 reinterprets the 32 byte output as a fixed length
+/// unsigned big endian integer before `mpint` encoding. Only the X25519
+/// multiplication itself is little endian, so no byte order flip happens here.
 pub(crate) fn shared_secret_mpint(raw: &[u8; 32]) -> Vec<u8> {
-    let mut bytes = *raw;
-    bytes.reverse();
-    encode_mpint(&bytes)
+    encode_mpint(raw)
 }
 
 /// The inputs of `H = SHA256(V_C || V_S || I_C || I_S || K_S || e || f || K)`.
@@ -333,6 +335,11 @@ fn unexpected(message: u8, expected: &str) -> Error {
 }
 
 #[cfg(test)]
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
 mod trace {
     use std::time::Duration;
 
@@ -340,10 +347,6 @@ mod trace {
 
     fn env(name: &str) -> Option<String> {
         std::env::var(name).ok().map(|value| value.trim().to_string()).filter(|value| !value.is_empty())
-    }
-
-    fn hex(bytes: &[u8]) -> String {
-        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
     }
 
     fn report(label: &str, bytes: &[u8]) {
@@ -433,5 +436,77 @@ mod trace {
             Ok(()) => println!("signature verification: OK"),
             Err(error) => println!("signature verification: FAILED ({}: {})", error.code(), error.message()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ed25519_dalek::{Signer, SigningKey};
+
+    use super::*;
+
+    // Synthetic exchange material. None of it comes from a deployed server, and
+    // `K` and `H` were derived independently from the RFC 4253 section 8
+    // ordering, so the vector freezes the byte layout instead of agreeing with
+    // our own encoder by construction.
+    const V_C: &str = "SSH-2.0-ExampleClient_1.0";
+    const V_S: &str = "SSH-2.0-ExampleServer_1.0";
+    const I_C: &str = "1400112233445566778899aabbccddeeff00000000";
+    const I_S: &str = "14ffeeddccbbaa9988776655443322110000000000";
+    const K_S: &str = "0000000b7373682d65643235353139000000201111111111111111111111111111111111111111111111111111111111111111";
+    const E: &str = "2222222222222222222222222222222222222222222222222222222222222222";
+    const F: &str = "3333333333333333333333333333333333333333333333333333333333333333";
+    // Two leading zero bytes followed by a byte below `0x80`, so both the
+    // leading-zero strip and the missing sign byte are exercised.
+    const SHARED_RAW: &str = "00007f0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d";
+    const K: &str = "7f0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d";
+    const H: &str = "0b246bda7fd24f66062df0619ba66c6091e448367b8e4ea89a14831705aa7d87";
+
+    fn unhex(value: &str) -> Vec<u8> {
+        assert!(value.len().is_multiple_of(2), "hex input must have an even length");
+        (0..value.len()).step_by(2).map(|index| u8::from_str_radix(&value[index..index + 2], 16).expect("hex pair")).collect()
+    }
+
+    fn synthetic_exchange() -> (Vec<u8>, Vec<u8>) {
+        let shared: [u8; 32] = unhex(SHARED_RAW).try_into().expect("the shared secret is 32 bytes");
+        let shared_mpint = shared_secret_mpint(&shared);
+        let host_key = unhex(K_S);
+        let client_kexinit = unhex(I_C);
+        let server_kexinit = unhex(I_S);
+        let client_public = unhex(E);
+        let server_public = unhex(F);
+        let exchange = exchange_hash_of(&ExchangeHashInputs {
+            client_version: V_C.as_bytes(),
+            server_version: V_S.as_bytes(),
+            client_kexinit: &client_kexinit,
+            server_kexinit: &server_kexinit,
+            host_key: &host_key,
+            client_public: &client_public,
+            server_public: &server_public,
+            shared_mpint: &shared_mpint,
+        });
+        (host_key, exchange)
+    }
+
+    #[test]
+    fn the_exchange_hash_follows_the_rfc_ordering() {
+        let shared: [u8; 32] = unhex(SHARED_RAW).try_into().expect("the shared secret is 32 bytes");
+        let shared_mpint = shared_secret_mpint(&shared);
+        assert_eq!(hex(&shared_mpint), K, "`K` reinterprets the X25519 output as a big endian integer");
+
+        let (_, exchange) = synthetic_exchange();
+        assert_eq!(hex(&exchange), H, "the exchange hash must follow the RFC 4253 section 8 ordering");
+    }
+
+    #[test]
+    fn a_host_signature_over_the_exchange_hash_verifies() {
+        let (host_key, exchange) = synthetic_exchange();
+        let key = SigningKey::from_bytes(&[42u8; 32]);
+        let mut blob = Writer::empty();
+        blob.string(HOST_KEY_ALGORITHM.as_bytes()).string(&key.verifying_key().to_bytes());
+        let mut signature = Writer::empty();
+        signature.string(HOST_KEY_ALGORITHM.as_bytes()).string(&key.sign(&exchange).to_bytes());
+
+        verify_signature(&blob.finish(), &signature.finish(), &exchange).expect("the signature must cover the exchange hash");
     }
 }
