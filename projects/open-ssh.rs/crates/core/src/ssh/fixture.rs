@@ -300,7 +300,10 @@ fn authenticate(transport: &mut Transport, auth: &FixtureAuth, client_key: &Sign
         return Err(protocol("the client did not start user authentication"));
     }
     let _user = reader.string()?;
-    let _service = reader.string()?;
+    let service = reader.string()?.to_vec();
+    if service != b"ssh-connection" {
+        return Err(protocol("the client asked to start a service other than `ssh-connection`"));
+    }
     let method = reader.string()?.to_vec();
     let accepted = match (auth, method.as_slice()) {
         (FixtureAuth::Password(expected), b"password") => {
