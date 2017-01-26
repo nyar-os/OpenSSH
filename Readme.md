@@ -26,6 +26,29 @@ execution. Availability depends on the transport.
 `ssh-ed25519` key and require an explicit `SHA256:` host key pin. Host keys are
 never trusted on first use.
 
+## Verified interoperability
+
+The client is checked against a stock OpenSSH server, not only against the
+in-crate loopback fixture, which speaks the same encoding as the client and
+therefore hides symmetric mistakes.
+
+| Peer | Verified paths |
+|------|----------------|
+| `OpenSSH_10.2p1` (Ubuntu 26.04), stock `sshd_config`, `ssh-ed25519` host key | `connect` with a matching pin, `exec` with the remote exit status and both output streams, `transfer` `upload` / `list` / `download` over SFTP |
+
+The `interop-sshd` CI job starts a real `sshd` on a Linux runner and runs the
+same three paths through `projects/open-ssh.rs/crates/core/tests/interop_sshd.rs`.
+A run that only passes the loopback fixture does not count as integration
+evidence.
+
+### Explicitly unsupported
+
+- RSA and other non-ed25519 identities. Only unencrypted `openssh-key-v1`
+  ed25519 identity files are read, so a passphrase-protected key is rejected.
+- Host keys other than `ssh-ed25519`, including ECDSA and RSA host keys.
+- `session` and other interactive channels. Only `connect`, `exec`, and
+  `transfer` are available.
+
 ## Layout
 
 | Path | Responsibility |
