@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Agent-facing CLI entry.
+ * Agent-facing `open-ssh` command, assembled with `@wae/commander`.
  *
  * Contract:
  * - non-interactive, always exits with a stable code
@@ -8,6 +8,9 @@
  * - capability ids are transport-neutral, `--transport` selects the adapter
  * - every mutating command supports `--dry-run`
  * - every command configures the audit actor before calling the native layer
+ *
+ * The command tree owns presentation only. Every operation goes through
+ * `new OpenSSH(options)`, which forwards to the N-API exports.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,8 +18,21 @@ import { fileURLToPath } from 'node:url';
 
 import { createCli, type CommandContext, type ParsedOptions } from '@wae/commander';
 
-import { AppError, fromNativeError, invokeCapability, connect, exec, transfer as transferFiles, capabilities, configureAudit, auditQuery, runGui, version, type CapabilityItem, type ConnectPreview, type ConnectResult, type ExecPreview, type ExecResult, type TransferDirection, type TransferPreview, type TransferResult, type Transport } from '@wae/open-ssh';
-
+import {
+    AppError,
+    OpenSSH,
+    fromNativeError,
+    type CapabilityItem,
+    type ConnectPreview,
+    type ConnectResult,
+    type EndpointOptions,
+    type ExecPreview,
+    type ExecResult,
+    type TransferDirection,
+    type TransferPreview,
+    type TransferResult,
+    type Transport,
+} from './index.js';
 import { loadRuntimeContract, type ActorChannel } from './runtime.js';
 
 const ENVELOPE_SCHEMA = 'wae.cli-result/v0';
@@ -104,13 +120,13 @@ function actorValue(
 }
 
 /** Configure the audit actor before any capability call. */
-function bootstrap(options: ParsedOptions): void {
+function bootstrap(client: OpenSSH, options: ParsedOptions): void {
     const mapping = runtime.audit?.actor;
     const kind = actorValue(mapping?.kind, stringOption(options, 'actor-kind'), 'WAE_ACTOR_KIND', 'user');
     if (kind !== 'user' && kind !== 'agent') {
         throw new AppError({ code: 'invalid_argument', message: '`--actor-kind` must be `user` or `agent`' });
     }
-    configureAudit({
+    client.configureAudit({
         actorKind: kind,
         actorId: actorValue(mapping?.id, stringOption(options, 'actor'), 'WAE_ACTOR_ID', 'unknown'),
         actorSource: actorValue(mapping?.source, stringOption(options, 'actor-source'), 'WAE_ACTOR_SOURCE', 'cli'),
@@ -165,7 +181,7 @@ function formatCapabilities(items: CapabilityItem[], transports: Transport[], no
 }
 
 /** Resolve one domain capability. The skeleton refuses before any side effect. */
-function resolve(options: ParsedOptions, ctx: CommandContext, capability: string, requiredTransport: boolean, mutating: boolean): number {
+function resolve(client: OpenSSH, options: ParsedOptions, ctx: CommandContext, capability: string, requiredTransport: boolean, mutating: boolean): number {
     try {
         if (mutating && flag(options, 'dry-run')) {
             // The dry-run flag is part of the contract even while the capability
@@ -173,9 +189,9 @@ function resolve(options: ParsedOptions, ctx: CommandContext, capability: string
             // refusal still decides the exit code.
             ctx.stderr('dry-run: plan unavailable because the capability is not implemented');
         }
-        bootstrap(options);
+        bootstrap(client, options);
         const transport = transportOption(options, requiredTransport);
-        const data = invokeCapability(capability, transport);
+        const data = client.invoke(capability, transport);
         emit(options, ctx, data, String(data));
         return EXIT.OK;
     }
@@ -186,8 +202,9 @@ function resolve(options: ParsedOptions, ctx: CommandContext, capability: string
 
 cli.command('capabilities', 'cli.cmd.capabilities').actionCtx(async (options, _args, ctx) => {
     try {
-        bootstrap(options);
-        const report = capabilities();
+        const client = new OpenSSH();
+        bootstrap(client, options);
+        const report = client.capabilities();
         emit(options, ctx, report, formatCapabilities(report.items, report.transports, report.notes));
         return EXIT.OK;
     }
@@ -198,8 +215,9 @@ cli.command('capabilities', 'cli.cmd.capabilities').actionCtx(async (options, _a
 
 cli.command('version', 'cli.cmd.version').actionCtx(async (options, _args, ctx) => {
     try {
-        bootstrap(options);
-        const current = version();
+        const client = new OpenSSH();
+        bootstrap(client, options);
+        const current = client.version();
         emit(options, ctx, { version: current }, current);
         return EXIT.OK;
     }
@@ -217,8 +235,9 @@ cli.command('audit', 'cli.cmd.audit')
     .option('--limit <n>', 'cli.opt.limit')
     .actionCtx(async (options, _args, ctx) => {
         try {
-            bootstrap(options);
-            const entries = auditQuery({
+            const client = new OpenSSH();
+            bootstrap(client, options);
+            const entries = client.auditQuery({
                 kind: stringOption(options, 'kind') === 'agent' ? 'agent' : stringOption(options, 'kind') === 'user' ? 'user' : undefined,
                 id: stringOption(options, 'id'),
                 capability: stringOption(options, 'capability'),
@@ -238,8 +257,9 @@ cli.command('gui', 'cli.cmd.gui')
     .option('--content-dir <path>', 'cli.opt.content-dir')
     .actionCtx(async (options, _args, ctx) => {
         try {
-            bootstrap(options);
-            const backend = await runGui({ contentDir: stringOption(options, 'content-dir') });
+            const client = new OpenSSH();
+            bootstrap(client, options);
+            const backend = await client.runGui({ contentDir: stringOption(options, 'content-dir') });
             emit(options, ctx, { backend }, `closed (${backend})`);
             return EXIT.OK;
         }
@@ -269,6 +289,24 @@ function credentials(options: ParsedOptions): { identityPath?: string; password?
         throw new AppError({ code: 'invalid_argument', message: `\`--password-env ${envName}\` is not set` });
     }
     return { password };
+}
+
+/** Build the target options a command line describes. */
+function endpoint(options: ParsedOptions, requiredTransport: boolean): EndpointOptions {
+    const transport = transportOption(options, requiredTransport);
+    const host = requiredOption(options, 'host');
+    const user = requiredOption(options, 'user');
+    const hostKeySha256 = stringOption(options, 'host-key-sha256');
+    const timeoutMs = integerOption(options, 'timeout-ms');
+    return {
+        ...(transport === undefined ? {} : { transport }),
+        host,
+        port: integerOption(options, 'port') ?? 22,
+        user,
+        ...credentials(options),
+        ...(hostKeySha256 === undefined ? {} : { hostKeySha256 }),
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    };
 }
 
 function formatConnectPreview(preview: ConnectPreview, host: string): string {
@@ -368,23 +406,15 @@ cli.command('connect', 'cli.cmd.connect')
     .option('--dry-run', 'cli.opt.dry-run')
     .actionCtx(async (options, _args, ctx) => {
         try {
-            bootstrap(options);
             const host = requiredOption(options, 'host');
-            const request = {
-                transport: transportOption(options, true),
-                host,
-                port: integerOption(options, 'port') ?? 22,
-                user: requiredOption(options, 'user'),
-                ...credentials(options),
-                hostKeySha256: stringOption(options, 'host-key-sha256'),
-                timeoutMs: integerOption(options, 'timeout-ms'),
-            };
+            const client = new OpenSSH(endpoint(options, true));
+            bootstrap(client, options);
             if (flag(options, 'dry-run')) {
-                const preview = connect({ ...request, dryRun: true });
+                const preview = client.previewConnect();
                 emit(options, ctx, preview, formatConnectPreview(preview, host));
                 return EXIT.OK;
             }
-            const result = connect(request);
+            const result = client.connect();
             if (flag(options, 'json')) {
                 emit(options, ctx, result, '');
             }
@@ -411,24 +441,16 @@ cli.command('exec', 'cli.cmd.exec')
     .option('--dry-run', 'cli.opt.dry-run')
     .actionCtx(async (options, _args, ctx) => {
         try {
-            bootstrap(options);
             const host = requiredOption(options, 'host');
-            const request = {
-                transport: transportOption(options, true),
-                host,
-                port: integerOption(options, 'port') ?? 22,
-                user: requiredOption(options, 'user'),
-                command: requiredOption(options, 'command'),
-                ...credentials(options),
-                hostKeySha256: stringOption(options, 'host-key-sha256'),
-                timeoutMs: integerOption(options, 'timeout-ms'),
-            };
+            const command = requiredOption(options, 'command');
+            const client = new OpenSSH(endpoint(options, true));
+            bootstrap(client, options);
             if (flag(options, 'dry-run')) {
-                const preview = exec({ ...request, dryRun: true });
+                const preview = client.previewExec(command);
                 emit(options, ctx, preview, formatPreview(preview, host));
                 return EXIT.OK;
             }
-            const result = exec(request);
+            const result = client.exec(command);
             if (flag(options, 'json')) {
                 emit(options, ctx, result, '');
             }
@@ -461,28 +483,23 @@ cli.command('transfer', 'cli.cmd.transfer')
     .option('--dry-run', 'cli.opt.dry-run')
     .actionCtx(async (options, _args, ctx) => {
         try {
-            bootstrap(options);
             const host = requiredOption(options, 'host');
             const request = {
                 transport: transportOption(options, true),
-                host,
-                port: integerOption(options, 'port') ?? 22,
-                user: requiredOption(options, 'user'),
                 direction: directionOption(options),
                 remotePath: requiredOption(options, 'remote'),
-                localPath: stringOption(options, 'local'),
-                ...credentials(options),
-                hostKeySha256: stringOption(options, 'host-key-sha256'),
-                timeoutMs: integerOption(options, 'timeout-ms'),
+                ...(stringOption(options, 'local') === undefined ? {} : { localPath: stringOption(options, 'local') }),
                 resume: flag(options, 'resume'),
                 progress: flag(options, 'progress'),
             };
+            const client = new OpenSSH(endpoint(options, true));
+            bootstrap(client, options);
             if (flag(options, 'dry-run')) {
-                const preview = transferFiles({ ...request, dryRun: true });
+                const preview = client.previewTransfer(request);
                 emit(options, ctx, preview, formatTransferPreview(preview, host));
                 return EXIT.OK;
             }
-            const result = transferFiles(request);
+            const result = client.transfer(request);
             if (flag(options, 'json')) {
                 emit(options, ctx, result, '');
             }
@@ -508,7 +525,10 @@ for (const [id, requiredTransport, mutating] of [
 ] as const) {
     const command = cli.command(id, `cli.cmd.${id}`).option('--transport <transport>', 'cli.opt.transport', { enum: ['ssh', 'rdp'] });
     if (mutating) command.option('--dry-run', 'cli.opt.dry-run');
-    command.actionCtx(async (options, _args, ctx) => resolve(options, ctx, id, requiredTransport, mutating));
+    command.actionCtx(async (options, _args, ctx) => {
+        const client = new OpenSSH();
+        return resolve(client, options, ctx, id, requiredTransport, mutating);
+    });
 }
 
 /** Exported for build tooling, which reads the command tree without running `--help`. */

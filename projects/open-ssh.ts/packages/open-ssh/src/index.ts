@@ -1,12 +1,15 @@
 /**
- * Typed library surface over the N-API boundary.
+ * Typed library and command surface over the N-API boundary.
  *
- * Every function forwards to the native addon and converts structured native
- * errors into `AppError`. The CLI, skills, and GUI consume this module so they
- * share one error contract. This package owns no `bin`.
+ * One class owns every capability. `new OpenSSH(options)` supplies the target
+ * defaults and each method accepts overrides, so callers never rebuild an
+ * options object per call. The `open-ssh` `bin` in `cli.ts` is a thin
+ * `@wae/commander` assembly over this class, and it owns no protocol logic.
  */
 import { AppError, fromNativeError } from './errors.js';
-import { loadNative } from './native.js';
+import { loadNative, supportedPlatforms } from './native.js';
+
+export type { PlatformArch } from './native.js';
 
 /** Capability availability states. `null` means available. */
 export type CapabilityState = 'unsupported_platform' | 'not_implemented' | 'dependency_blocked';
@@ -43,30 +46,6 @@ export interface CapabilitiesReport {
     notes: string[];
 }
 
-/** One command row of the CLI contract. */
-export interface CliCommandRow {
-    id: string;
-    capability: string;
-    kind: 'meta' | 'domain';
-    state: CapabilityState | null;
-    code: string | null;
-}
-
-/** One exit code row of the CLI contract. */
-export interface CliExitCodeRow {
-    name: 'success' | 'failure' | 'usage' | 'capability' | 'canceled';
-    code: number;
-}
-
-/** Stable CLI contract mirrored by the Rust `open-ssh-cli` crate. */
-export interface CliContract {
-    schema: string;
-    app: string;
-    envelope: string;
-    exitCodes: CliExitCodeRow[];
-    commands: CliCommandRow[];
-}
-
 /** GUI open options. */
 export interface GuiOptions {
     contentDir?: string;
@@ -92,20 +71,28 @@ export interface AuditQuery {
     limit?: number;
 }
 
+/** One audit record as stored by the shared facility. */
+export type AuditRecord = Record<string, unknown>;
+
 /** Success payload shared by the meta capabilities. */
 export interface OkResult {
     ok: true;
 }
 
-/** Authentication method used by one `exec` call. */
+/** Authentication method used by one call. */
 export type ExecAuthMethod = 'password' | 'publickey';
 
-/** One `connect` request. `ssh` is the only transport that carries it. */
-export interface ConnectRequest {
+/**
+ * Target defaults shared by every capability call.
+ *
+ * The constructor takes the same shape, and each method accepts a partial
+ * override. Authentication is either `password` or `identityPath`, never both.
+ */
+export interface EndpointOptions {
     transport?: Transport;
-    host: string;
+    host?: string;
     port?: number;
-    user: string;
+    user?: string;
     /** Remote password. Mutually exclusive with `identityPath`. */
     password?: string;
     /** Path to an unencrypted `ssh-ed25519` private key. */
@@ -114,6 +101,9 @@ export interface ConnectRequest {
     hostKeySha256?: string;
     timeoutMs?: number;
 }
+
+/** Constructor options, identical to the per-call overrides. */
+export type OpenSSHOptions = EndpointOptions;
 
 /** Result of one successful `connect` call. */
 export interface ConnectResult {
@@ -133,7 +123,7 @@ export interface ConnectResult {
     durationMs: number;
 }
 
-/** What a `--dry-run` `connect` resolves without connecting. */
+/** What a preview `connect` resolves without connecting. */
 export interface ConnectPreview {
     transport: 'ssh';
     hostHash: string;
@@ -142,22 +132,6 @@ export interface ConnectPreview {
     authMethod: ExecAuthMethod;
     hostKeySha256: string;
     timeoutMs: number;
-}
-
-/** One `exec` request. `ssh` is the only transport that carries it. */
-export interface ExecRequest {
-    transport?: Transport;
-    host: string;
-    port?: number;
-    user: string;
-    command: string;
-    /** Remote password. Mutually exclusive with `identityPath`. */
-    password?: string;
-    /** Path to an unencrypted `ssh-ed25519` private key. */
-    identityPath?: string;
-    /** Required `SHA256:` host key fingerprint. */
-    hostKeySha256?: string;
-    timeoutMs?: number;
 }
 
 /** Result of one successful `exec` call. */
@@ -176,7 +150,7 @@ export interface ExecResult {
     durationMs: number;
 }
 
-/** What a `--dry-run` `exec` resolves without connecting. */
+/** What a preview `exec` resolves without connecting. */
 export interface ExecPreview {
     transport: 'ssh';
     hostHash: string;
@@ -198,24 +172,13 @@ export interface TransferEntry {
     isDir: boolean;
 }
 
-/** One `transfer` request. `ssh` is the only transport that carries it. */
-export interface TransferRequest {
-    transport?: Transport;
-    host: string;
-    port?: number;
-    user: string;
+/** Options for one `transfer` call. */
+export interface TransferOptions extends EndpointOptions {
     direction: TransferDirection;
     /** Remote file or directory. Escapes and empty values are refused. */
     remotePath: string;
     /** Local file for upload and download. Ignored for listings. */
     localPath?: string;
-    /** Remote password. Mutually exclusive with `identityPath`. */
-    password?: string;
-    /** Path to an unencrypted `ssh-ed25519` private key. */
-    identityPath?: string;
-    /** Required `SHA256:` host key fingerprint. */
-    hostKeySha256?: string;
-    timeoutMs?: number;
     /** Continue from the bytes already present on the other side. */
     resume?: boolean;
     /** Write human-readable progress to stderr while bytes move. */
@@ -241,7 +204,7 @@ export interface TransferResult {
     durationMs: number;
 }
 
-/** What a `--dry-run` `transfer` resolves without connecting. */
+/** What a preview `transfer` resolves without connecting. */
 export interface TransferPreview {
     transport: 'ssh';
     hostHash: string;
@@ -258,130 +221,222 @@ export interface TransferPreview {
     timeoutMs: number;
 }
 
-function invoke<T>(run: () => T): T {
-    try {
-        return run();
+/** Normalized endpoint fields, with the constructor defaults applied. */
+interface ResolvedEndpoint {
+    transport: Transport;
+    host: string;
+    port: number;
+    user: string;
+    password?: string;
+    identityPath?: string;
+    hostKeySha256: string;
+    timeoutMs?: number;
+}
+
+/**
+ * A client for one set of target defaults.
+ *
+ * ```ts
+ * const ssh = new OpenSSH({
+ *     host: 'example.internal',
+ *     user: 'deploy',
+ *     identityPath: '/home/me/.ssh/id_ed25519',
+ *     hostKeySha256: 'SHA256:...',
+ * });
+ * const run = ssh.exec('uname -a');
+ * ```
+ */
+export class OpenSSH {
+    readonly #defaults: EndpointOptions;
+
+    constructor(options: OpenSSHOptions = {}) {
+        this.#defaults = { ...options };
     }
-    catch (error) {
-        throw fromNativeError(error);
+
+    /** Supported `platform-arch` keys of the published native packages. */
+    static supportedPlatforms(): string[] {
+        return [...supportedPlatforms()];
     }
-}
 
-/** Native addon version. */
-export function version(): string {
-    return invoke(() => loadNative().version());
-}
-
-/** Capability report, including rows owned by the upstream facade. */
-export function capabilities(): CapabilitiesReport {
-    return invoke(() => loadNative().capabilities() as CapabilitiesReport);
-}
-
-/**
- * Connect, verify the pinned host key, authenticate, and disconnect.
- *
- * The call proves the target and the credentials and reports the negotiated
- * session without running a command. `dryRun` resolves the same request without
- * opening a connection and returns a {@link ConnectPreview}.
- */
-export function connect(request: ConnectRequest & { dryRun: true }): ConnectPreview;
-export function connect(request: ConnectRequest & { dryRun?: false }): ConnectResult;
-export function connect(request: ConnectRequest & { dryRun?: boolean }): ConnectResult | ConnectPreview {
-    return invoke(() => loadNative().connect({ ...request }) as ConnectResult | ConnectPreview);
-}
-
-/**
- * Run one command over `ssh` and return its captured output.
- *
- * `dryRun` resolves the same request without opening a connection and returns
- * an {@link ExecPreview}. A host key pin is mandatory in both modes: this
- * product never trusts an unknown key.
- */
-export function exec(request: ExecRequest & { dryRun: true }): ExecPreview;
-export function exec(request: ExecRequest & { dryRun?: false }): ExecResult;
-export function exec(request: ExecRequest & { dryRun?: boolean }): ExecResult | ExecPreview {
-    return invoke(() => loadNative().exec({ ...request }) as ExecResult | ExecPreview);
-}
-
-/**
- * Upload, download, or list files over `ssh`.
- *
- * `resume` continues from the bytes already present on the target side.
- * `progress` writes human progress to stderr while the result keeps the exact
- * `bytes` and `resumedFrom` for machine readers. Failures keep distinct codes:
- * `remote_not_found`, `permission_denied`, `disk_full`, `connection_lost`, and
- * `path_rejected`.
- */
-export function transfer(request: TransferRequest & { dryRun: true }): TransferPreview;
-export function transfer(request: TransferRequest & { dryRun?: false }): TransferResult;
-export function transfer(request: TransferRequest & { dryRun?: boolean }): TransferResult | TransferPreview {
-    return invoke(() => loadNative().transfer({ ...request }) as TransferResult | TransferPreview);
-}
-
-/**
- * Resolve one domain capability by its stable id.
- *
- * `transport` is a separate dimension and never part of the id. Passing one
- * selects a more precise refusal, for example `exec` over `rdp` reports that RDP
- * has no command channel.
- *
- * `connect`, `exec`, and `transfer` are the available domain capabilities and
- * have their own exports. Every other capability still refuses with its stable
- * code. Callers must not treat an exception here as a successful result.
- */
-export function invokeCapability<T = unknown>(capability: string, transport?: Transport): T {
-    return invoke(() => loadNative().invoke(capability, transport) as T);
-}
-
-/** Stable CLI contract shared with `@wae/open-ssh-cli`. */
-export function cliContract(): CliContract {
-    return invoke(() => loadNative().cliContract() as CliContract);
-}
-
-/** Configure the shared audit facility for this process. */
-export function configureAudit(actor: AuditActor): OkResult {
-    return invoke(() => loadNative().configureAudit(actor) as OkResult);
-}
-
-/** Read audit entries for the current actor as structured records. */
-export function auditQuery(filter: AuditQuery = {}): Record<string, unknown>[] {
-    const json = invoke(() => loadNative().auditQuery(filter));
-    return invoke(() => JSON.parse(json) as Record<string, unknown>[]);
-}
-
-/** Open the GUI window. */
-export function openGui(options: GuiOptions = {}): { backend: string } {
-    return invoke(() => loadNative().openGui(options) as { backend: string });
-}
-
-/** Pump one GUI event batch. */
-export function pumpEvents(): boolean {
-    return invoke(() => loadNative().pumpEvents());
-}
-
-/** Request GUI close. */
-export function closeGui(): boolean {
-    return invoke(() => loadNative().closeGui());
-}
-
-/** Whether the GUI window is still open. */
-export function isGuiOpen(): boolean {
-    return invoke(() => loadNative().isGuiOpen());
-}
-
-/**
- * Open the GUI and pump until the window closes.
- *
- * The host owns the event loop, so the process stays alive without spawning a
- * second runtime. Implemented here once so the CLI and plugins share it.
- */
-export async function runGui(options: GuiOptions = {}): Promise<string> {
-    const opened = openGui(options);
-    while (pumpEvents()) {
-        await new Promise((resolve) => setTimeout(resolve, 16));
+    /** Native addon version. */
+    version(): string {
+        return this.#invoke(() => loadNative().version());
     }
-    closeGui();
-    return opened.backend;
+
+    /** Capability report, including rows owned by the upstream facade. */
+    capabilities(): CapabilitiesReport {
+        return this.#invoke(() => loadNative().capabilities() as CapabilitiesReport);
+    }
+
+    /**
+     * Resolve one domain capability by its stable id.
+     *
+     * `transport` is a separate dimension and never part of the id. Available
+     * capabilities have dedicated methods, so this raises their refusal instead
+     * of silently doing nothing.
+     */
+    invoke<T = unknown>(capability: string, transport?: Transport): T {
+        return this.#invoke(() => loadNative().invoke(capability, transport) as T);
+    }
+
+    /** Configure the shared audit facility for this process. */
+    configureAudit(actor: AuditActor): OkResult {
+        return this.#invoke(() => loadNative().configureAudit({ ...actor }) as OkResult);
+    }
+
+    /** Read audit entries for the current actor as structured records. */
+    auditQuery(filter: AuditQuery = {}): AuditRecord[] {
+        const json = this.#invoke(() => loadNative().auditQuery({ ...filter }));
+        return this.#invoke(() => JSON.parse(json) as AuditRecord[]);
+    }
+
+    /**
+     * Connect, verify the pinned host key, authenticate, and disconnect.
+     *
+     * The call proves the target and the credentials and reports the negotiated
+     * session without running a command.
+     */
+    connect(options: EndpointOptions = {}): ConnectResult {
+        const endpoint = this.#endpoint(options);
+        return this.#invoke(() => loadNative().connect({ ...endpoint }) as ConnectResult);
+    }
+
+    /** Resolve a `connect` request without opening a connection. */
+    previewConnect(options: EndpointOptions = {}): ConnectPreview {
+        const endpoint = this.#endpoint(options);
+        return this.#invoke(() => loadNative().connect({ ...endpoint, dryRun: true }) as ConnectPreview);
+    }
+
+    /** Run one command over `ssh` and return its captured output. */
+    exec(command: string, options: EndpointOptions = {}): ExecResult {
+        const endpoint = this.#endpoint(options);
+        if (!command.trim()) {
+            throw new AppError({ code: 'invalid_argument', message: '`command` must not be empty' });
+        }
+        return this.#invoke(() => loadNative().exec({ ...endpoint, command }) as ExecResult);
+    }
+
+    /** Resolve an `exec` request without opening a connection. */
+    previewExec(command: string, options: EndpointOptions = {}): ExecPreview {
+        const endpoint = this.#endpoint(options);
+        if (!command.trim()) {
+            throw new AppError({ code: 'invalid_argument', message: '`command` must not be empty' });
+        }
+        return this.#invoke(() => loadNative().exec({ ...endpoint, command, dryRun: true }) as ExecPreview);
+    }
+
+    /** Upload, download, or list files over `ssh`. */
+    transfer(options: TransferOptions): TransferResult {
+        const { direction, remotePath, localPath, resume, progress, ...endpointOptions } = options;
+        const endpoint = this.#endpoint(endpointOptions);
+        return this.#invoke(
+            () =>
+                loadNative().transfer({
+                    ...endpoint,
+                    direction,
+                    remotePath,
+                    ...(localPath === undefined ? {} : { localPath }),
+                    ...(resume === undefined ? {} : { resume }),
+                    ...(progress === undefined ? {} : { progress }),
+                }) as TransferResult,
+        );
+    }
+
+    /** Resolve a `transfer` request without opening a connection. */
+    previewTransfer(options: TransferOptions): TransferPreview {
+        const { direction, remotePath, localPath, resume, progress, ...endpointOptions } = options;
+        const endpoint = this.#endpoint(endpointOptions);
+        return this.#invoke(
+            () =>
+                loadNative().transfer({
+                    ...endpoint,
+                    direction,
+                    remotePath,
+                    ...(localPath === undefined ? {} : { localPath }),
+                    ...(resume === undefined ? {} : { resume }),
+                    ...(progress === undefined ? {} : { progress }),
+                    dryRun: true,
+                }) as TransferPreview,
+        );
+    }
+
+    /** Open the GUI window. */
+    openGui(options: GuiOptions = {}): { backend: string } {
+        return this.#invoke(() => loadNative().openGui({ ...options }) as { backend: string });
+    }
+
+    /** Pump one GUI event batch. */
+    pumpEvents(): boolean {
+        return this.#invoke(() => loadNative().pumpEvents());
+    }
+
+    /** Request GUI close. */
+    closeGui(): boolean {
+        return this.#invoke(() => loadNative().closeGui());
+    }
+
+    /** Whether the GUI window is still open. */
+    isGuiOpen(): boolean {
+        return this.#invoke(() => loadNative().isGuiOpen());
+    }
+
+    /**
+     * Open the GUI and pump until the window closes.
+     *
+     * The host owns the event loop, so the process stays alive without spawning
+     * a second runtime.
+     */
+    async runGui(options: GuiOptions = {}): Promise<string> {
+        const opened = this.openGui(options);
+        while (this.pumpEvents()) {
+            await new Promise((resolve) => setTimeout(resolve, 16));
+        }
+        this.closeGui();
+        return opened.backend;
+    }
+
+    /** Merge the constructor defaults with one call's overrides. */
+    #endpoint(options: EndpointOptions): ResolvedEndpoint {
+        const merged: EndpointOptions = { ...this.#defaults, ...options };
+        const host = merged.host?.trim();
+        if (!host) {
+            throw new AppError({ code: 'invalid_argument', message: '`host` is required' });
+        }
+        const user = merged.user?.trim();
+        if (!user) {
+            throw new AppError({ code: 'invalid_argument', message: '`user` is required' });
+        }
+        const hostKeySha256 = merged.hostKeySha256?.trim();
+        if (!hostKeySha256) {
+            throw new AppError({
+                code: 'host_key_unverified',
+                message: 'a pinned `hostKeySha256` fingerprint is required, and this client never trusts an unknown key',
+            });
+        }
+        if ((merged.password === undefined) === (merged.identityPath === undefined)) {
+            throw new AppError({ code: 'invalid_argument', message: 'pass exactly one of `password` or `identityPath`' });
+        }
+        return {
+            transport: merged.transport ?? 'ssh',
+            host,
+            port: merged.port ?? 22,
+            user,
+            ...(merged.password === undefined ? {} : { password: merged.password }),
+            ...(merged.identityPath === undefined ? {} : { identityPath: merged.identityPath }),
+            hostKeySha256,
+            ...(merged.timeoutMs === undefined ? {} : { timeoutMs: merged.timeoutMs }),
+        };
+    }
+
+    /** Convert native boundary failures into `AppError`. */
+    #invoke<T>(run: () => T): T {
+        try {
+            return run();
+        }
+        catch (error) {
+            throw fromNativeError(error);
+        }
+    }
 }
 
 export { AppError, fromNativeError } from './errors.js';

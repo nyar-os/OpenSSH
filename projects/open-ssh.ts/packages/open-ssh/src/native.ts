@@ -1,15 +1,39 @@
 /**
  * Lazy loader for the platform-native addon.
  *
- * The addon is an optional dependency. It is loaded only when a native
- * capability is called, so `--help`, `version`, and locale resolution work on
- * machines without the binary.
+ * Every supported platform ships its own optional dependency, and the addon is
+ * resolved from the matching package only. A missing platform or a missing
+ * artifact raises a structured error instead of falling back to a pure
+ * JavaScript implementation, because the protocol lives only in the addon.
  */
 import { createRequire } from 'node:module';
+
 import { AppError } from './errors.js';
 
 const require = createRequire(import.meta.url);
-const PLATFORM_PACKAGE = '@wae/open-ssh-win32-x64';
+
+/** One published native target. */
+export type PlatformArch = 'win32-x64' | 'darwin-x64' | 'darwin-arm64' | 'linux-x64' | 'linux-arm64';
+
+/** Platform packages published next to this one. */
+const PLATFORM_PACKAGES: Record<PlatformArch, string> = {
+    'win32-x64': '@wae/open-ssh-win32-x64',
+    'darwin-x64': '@wae/open-ssh-darwin-x64',
+    'darwin-arm64': '@wae/open-ssh-darwin-arm64',
+    'linux-x64': '@wae/open-ssh-linux-x64',
+    'linux-arm64': '@wae/open-ssh-linux-arm64',
+};
+
+/** Every `platform-arch` key that has a published addon. */
+export function supportedPlatforms(): PlatformArch[] {
+    return Object.keys(PLATFORM_PACKAGES) as PlatformArch[];
+}
+
+/** The current host target, or `null` when no addon is published for it. */
+function currentPlatformArch(): PlatformArch | null {
+    const key = `${process.platform}-${process.arch}`;
+    return Object.hasOwn(PLATFORM_PACKAGES, key) ? (key as PlatformArch) : null;
+}
 
 /** Options accepted by the native `connect` export. */
 export interface NativeConnectOptions {
@@ -64,7 +88,6 @@ export interface NativeBindings {
     exec(options: NativeExecOptions): unknown;
     transfer(options: NativeTransferOptions): unknown;
     invoke(capability: string, transport?: string): unknown;
-    cliContract(): unknown;
     openGui(options?: { contentDir?: string; title?: string }): unknown;
     pumpEvents(): boolean;
     closeGui(): boolean;
@@ -88,22 +111,35 @@ export interface NativeBindings {
 
 let cached: NativeBindings | null = null;
 
-/** Load the native addon once. */
+/** Load the addon for the current target, or raise a structured error. */
 export function loadNative(): NativeBindings {
     if (cached) return cached;
+    const platform = `${process.platform}-${process.arch}`;
+    const target = currentPlatformArch();
+    if (target === null) {
+        throw new AppError({
+            code: 'unsupported_platform',
+            platform,
+            attempts: [],
+            message:
+                `no native addon is published for \`${platform}\`. ` +
+                `Supported targets: ${supportedPlatforms().join(', ')}.`,
+        });
+    }
+    const packageName = PLATFORM_PACKAGES[target];
     try {
-        cached = require(PLATFORM_PACKAGE) as NativeBindings;
+        cached = require(packageName) as NativeBindings;
         return cached;
     }
     catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         throw new AppError({
             code: 'native_unavailable',
-            platform: `${process.platform}-${process.arch}`,
+            platform,
+            attempts: [packageName],
             message:
-                `cannot load ${PLATFORM_PACKAGE}: ${message}\n` +
-                'Run `pnpm run build:napi` from the repository root, ' +
-                'or install the matching platform package.',
+                `cannot load \`${packageName}\`: ${message}\n` +
+                'Run `pnpm run build:napi` from the repository root, or install the matching platform package.',
         });
     }
 }

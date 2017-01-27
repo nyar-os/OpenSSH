@@ -206,13 +206,13 @@ fn resolve_gui_dir(requested: Option<String>) -> Result<String> {
     {
         return Ok(dir);
     }
-    let candidates = [PathBuf::from("projects/open-ssh.ts/packages/open-ssh-cli/dist/gui"), PathBuf::from("dist/gui"), PathBuf::from("gui")];
+    let candidates = [PathBuf::from("projects/open-ssh.ts/packages/open-ssh/dist/gui"), PathBuf::from("dist/gui"), PathBuf::from("gui")];
     for candidate in candidates {
         if candidate.join("index.html").is_file() {
             return Ok(candidate.display().to_string());
         }
     }
-    Err(Error::new("gui content dir not found: pass `contentDir` or build `projects/open-ssh.ts/packages/open-ssh-cli/dist/gui`"))
+    Err(Error::new("gui content dir not found: pass `contentDir` or build `projects/open-ssh.ts/packages/open-ssh/dist/gui`"))
 }
 
 fn actor_kind(value: Option<&str>) -> wae::audit::ActorKind {
@@ -289,13 +289,6 @@ fn invoke(ctx: CallContext) -> Result<JsValue> {
         Ok(()) => Err(Error::new("invoke must not resolve in the skeleton round")),
         Err(error) => Err(core_error(error)),
     }
-}
-
-/// The stable CLI contract shared with the TypeScript CLI.
-#[function(js_name = "cliContract")]
-fn cli_contract(ctx: CallContext) -> Result<JsValue> {
-    let contract = open_ssh_cli::contract();
-    value_to_js(&ctx, &contract)
 }
 
 fn usage(message: impl Into<String>) -> Error {
@@ -672,7 +665,6 @@ register_module![
     exec,
     transfer,
     invoke,
-    cli_contract,
     open_gui,
     pump_events,
     close_gui,

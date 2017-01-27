@@ -1,0 +1,17 @@
+{
+    "name": "@wae/open-ssh-darwin-arm64",
+    "version": "0.0.0",
+    "description": "Native addon for OpenSSH on macOS arm64",
+    "os": [
+        "darwin"
+    ],
+    "cpu": [
+        "arm64"
+    ],
+    "main": "open-ssh.darwin-arm64.node",
+    "files": [
+        "open-ssh.darwin-arm64.node",
+        "readme.md"
+    ],
+    "license": "Apache-2.0"
+}

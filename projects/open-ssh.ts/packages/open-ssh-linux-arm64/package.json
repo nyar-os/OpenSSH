@@ -1,0 +1,17 @@
+{
+    "name": "@wae/open-ssh-linux-arm64",
+    "version": "0.0.0",
+    "description": "Native addon for OpenSSH on Linux arm64",
+    "os": [
+        "linux"
+    ],
+    "cpu": [
+        "arm64"
+    ],
+    "main": "open-ssh.linux-arm64.node",
+    "files": [
+        "open-ssh.linux-arm64.node",
+        "readme.md"
+    ],
+    "license": "Apache-2.0"
+}

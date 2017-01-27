@@ -18,4 +18,3 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 wae = { workspace = true }
 open-ssh-core = { workspace = true }
-open-ssh-cli = { workspace = true }

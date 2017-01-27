@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["projects/open-ssh.rs/crates/core", "projects/open-ssh.rs/crates/napi", "projects/open-ssh.rs/crates/cli"]
-default-members = ["projects/open-ssh.rs/crates/core", "projects/open-ssh.rs/crates/napi", "projects/open-ssh.rs/crates/cli"]
+members = ["projects/open-ssh.rs/crates/core", "projects/open-ssh.rs/crates/napi"]
+default-members = ["projects/open-ssh.rs/crates/core", "projects/open-ssh.rs/crates/napi"]
 
 [workspace.package]
 version = "0.0.0"
@@ -25,7 +25,6 @@ getrandom = "0.3"
 # Cross-repo git dependencies must pin the full 40-character revision.
 wae = { git = "https://github.com/doki-land/wae-framework.git", rev = "ae0db25961a72a2abc51a24b097f4363093c5394" }
 open-ssh-core = { path = "projects/open-ssh.rs/crates/core", version = "0.0.0" }
-open-ssh-cli = { path = "projects/open-ssh.rs/crates/cli", version = "0.0.0" }
 
 [profile.release]
 lto = true
