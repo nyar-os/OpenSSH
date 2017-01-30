@@ -1,0 +1,161 @@
+name: publish-npm
+
+# Trusted Publisher contract (sole npm trusted workflow — keep this filename):
+#   file = publish-npm.yml
+#   repo = nyar-os/OpenSSH
+#   env  = NPM_PUBLISH
+#
+# Real `@wae/open-ssh*` versions publish only through npm Trusted Publisher
+# (OIDC) on tag push. Local `wae publish --execute` is limited to the `0.0.0`
+# placeholder stub used to configure the trusted publisher.
+#
+# Every native platform package is built on a matching runner, then published
+# together with the TypeScript package that carries the library and the bin.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag (for example v0.0.1). Its version is published."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-native:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - runner: windows-latest
+            target: win32-x64
+          - runner: macos-14
+            target: darwin-arm64
+          - runner: macos-13
+            target: darwin-x64
+          - runner: ubuntu-latest
+            target: linux-x64
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      CARGO_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Build native addon
+        run: pnpm exec wae native build --target ${{ matrix.target }}
+      - name: Smoke load the native addon
+        run: pnpm exec wae native smoke --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v5
+        with:
+          name: open-ssh-${{ matrix.target }}
+          path: projects/open-ssh.ts/packages/open-ssh-${{ matrix.target }}/open-ssh.${{ matrix.target }}.node
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build-native
+    runs-on: ubuntu-latest
+    environment: NPM_PUBLISH
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Upgrade npm for Trusted Publisher support
+        run: npm install --global npm@11
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v5
+        with:
+          path: /tmp/open-ssh-native
+          pattern: open-ssh-*
+      - name: Stage platform artifacts
+        run: |
+          set -euo pipefail
+          for target in win32-x64 darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
+            src="/tmp/open-ssh-native/open-ssh-${target}/open-ssh.${target}.node"
+            dest="projects/open-ssh.ts/packages/open-ssh-${target}/open-ssh.${target}.node"
+            test -f "$src"
+            cp "$src" "$dest"
+          done
+      - name: Build TypeScript
+        run: pnpm run build:ts
+      - name: Verify the release set and the tag
+        run: |
+          set -euo pipefail
+          packages="projects/open-ssh.ts/packages"
+          pnpm exec wae publish \
+            --dir "$packages/open-ssh-win32-x64" \
+            --dir "$packages/open-ssh-darwin-arm64" \
+            --dir "$packages/open-ssh-darwin-x64" \
+            --dir "$packages/open-ssh-linux-x64" \
+            --dir "$packages/open-ssh-linux-arm64" \
+            --dir "$packages/open-ssh" \
+            --tag "$RELEASE_TAG" \
+            --cargo Cargo.toml
+      - name: Publish packages to npm
+        run: |
+          set -euo pipefail
+          packages="projects/open-ssh.ts/packages"
+          for dir in \
+            "$packages/open-ssh-win32-x64" \
+            "$packages/open-ssh-darwin-arm64" \
+            "$packages/open-ssh-darwin-x64" \
+            "$packages/open-ssh-linux-x64" \
+            "$packages/open-ssh-linux-arm64" \
+            "$packages/open-ssh"
+          do
+            name="$(node -p "require('./$dir/package.json').name")"
+            echo "publishing $name"
+            (cd "$dir" && npm publish --provenance --access public)
+          done
+      - name: Verify every package landed on the registry
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          for name in \
+            @wae/open-ssh-win32-x64 \
+            @wae/open-ssh-darwin-arm64 \
+            @wae/open-ssh-darwin-x64 \
+            @wae/open-ssh-linux-x64 \
+            @wae/open-ssh-linux-arm64 \
+            @wae/open-ssh
+          do
+            for attempt in 1 2 3 4 5; do
+              if npm view "${name}@${version}" version > /dev/null 2>&1; then
+                echo "ok ${name}@${version}"
+                break
+              fi
+              if [ "${attempt}" = 5 ]; then
+                echo "missing ${name}@${version} after 5 attempts"
+                exit 1
+              fi
+              sleep 3
+            done
+          done

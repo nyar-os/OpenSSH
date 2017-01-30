@@ -139,7 +139,7 @@ export default defineConfig({
     // binds `GITHUB_SHA` to the release tag.
     ci: {
         repo: 'nyar-os/OpenSSH',
-        workflows: ['check-rust.yml', 'check-typescript.yml', 'interop-sshd.yml'],
+        workflows: ['check-rust.yml', 'check-typescript.yml', 'interop-sshd.yml', 'publish-npm.yml'],
         shaBinding: false,
     },
     // `wae build` writes these into the app CLI as `dist/wae-runtime.json`.
