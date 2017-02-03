@@ -467,7 +467,7 @@ mod tests {
         (0..value.len()).step_by(2).map(|index| u8::from_str_radix(&value[index..index + 2], 16).expect("hex pair")).collect()
     }
 
-    fn synthetic_exchange() -> (Vec<u8>, Vec<u8>) {
+    fn synthetic_exchange() -> Vec<u8> {
         let shared: [u8; 32] = unhex(SHARED_RAW).try_into().expect("the shared secret is 32 bytes");
         let shared_mpint = shared_secret_mpint(&shared);
         let host_key = unhex(K_S);
@@ -475,7 +475,7 @@ mod tests {
         let server_kexinit = unhex(I_S);
         let client_public = unhex(E);
         let server_public = unhex(F);
-        let exchange = exchange_hash_of(&ExchangeHashInputs {
+        exchange_hash_of(&ExchangeHashInputs {
             client_version: V_C.as_bytes(),
             server_version: V_S.as_bytes(),
             client_kexinit: &client_kexinit,
@@ -484,8 +484,7 @@ mod tests {
             client_public: &client_public,
             server_public: &server_public,
             shared_mpint: &shared_mpint,
-        });
-        (host_key, exchange)
+        })
     }
 
     #[test]
@@ -494,13 +493,13 @@ mod tests {
         let shared_mpint = shared_secret_mpint(&shared);
         assert_eq!(hex(&shared_mpint), K, "`K` reinterprets the X25519 output as a big endian integer");
 
-        let (_, exchange) = synthetic_exchange();
+        let exchange = synthetic_exchange();
         assert_eq!(hex(&exchange), H, "the exchange hash must follow the RFC 4253 section 8 ordering");
     }
 
     #[test]
     fn a_host_signature_over_the_exchange_hash_verifies() {
-        let (host_key, exchange) = synthetic_exchange();
+        let exchange = synthetic_exchange();
         let key = SigningKey::from_bytes(&[42u8; 32]);
         let mut blob = Writer::empty();
         blob.string(HOST_KEY_ALGORITHM.as_bytes()).string(&key.verifying_key().to_bytes());
