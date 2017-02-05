@@ -1,2 +1,3 @@
 packages:
-  - "projects/*/packages/*"
+  # One explicit product glob: Nifty expands only a trailing `/*` segment.
+  - "projects/open-ssh.ts/packages/*"

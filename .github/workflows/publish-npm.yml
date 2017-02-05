@@ -120,21 +120,7 @@ jobs:
             --tag "$RELEASE_TAG" \
             --cargo Cargo.toml
       - name: Publish packages to npm
-        run: |
-          set -euo pipefail
-          packages="projects/open-ssh.ts/packages"
-          for dir in \
-            "$packages/open-ssh-win32-x64" \
-            "$packages/open-ssh-darwin-arm64" \
-            "$packages/open-ssh-darwin-x64" \
-            "$packages/open-ssh-linux-x64" \
-            "$packages/open-ssh-linux-arm64" \
-            "$packages/open-ssh"
-          do
-            name="$(node -p "require('./$dir/package.json').name")"
-            echo "publishing $name"
-            (cd "$dir" && npm publish --provenance --access public)
-          done
+        run: pnpm exec nifty publish --access public --version="${RELEASE_TAG#v}"
       - name: Verify every package landed on the registry
         run: |
           set -euo pipefail

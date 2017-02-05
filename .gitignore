@@ -21,3 +21,7 @@ dist/
 # VMZ
 packages/open-ssh-ui/.cache/
 projects/open-ssh.ts/packages/open-ssh-ui/.cache/
+
+# Release tooling
+.env.placeholder.local
+.cache/
