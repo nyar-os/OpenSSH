@@ -8,5 +8,7 @@ pub mod audit;
 pub mod errors;
 /// Host platform descriptor and the capability report.
 pub mod platform;
+/// In-process SSH client backing the `exec` capability.
+pub mod ssh;
 
 pub use errors::{CapabilityState, Error, ErrorCode, Result};
