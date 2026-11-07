@@ -69,6 +69,7 @@ impl ExitCode {
     pub fn for_error_code(code: &str) -> Self {
         match code {
             "unsupported_platform" | "not_implemented" | "dependency_blocked" => Self::Capability,
+            "invalid_argument" | "unknown_command" => Self::Usage,
             _ => Self::Failure,
         }
     }
@@ -218,7 +219,8 @@ mod tests {
         assert_eq!(ExitCode::for_error_code("unsupported_platform"), ExitCode::Capability);
         assert_eq!(ExitCode::for_error_code("not_implemented"), ExitCode::Capability);
         assert_eq!(ExitCode::for_error_code("dependency_blocked"), ExitCode::Capability);
-        assert_eq!(ExitCode::for_error_code("invalid_argument"), ExitCode::Failure);
+        assert_eq!(ExitCode::for_error_code("invalid_argument"), ExitCode::Usage);
+        assert_eq!(ExitCode::for_error_code("unknown_command"), ExitCode::Usage);
     }
 
     #[test]
