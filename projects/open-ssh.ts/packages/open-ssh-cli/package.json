@@ -1,0 +1,30 @@
+{
+    "name": "@wae/open-ssh-cli",
+    "version": "0.0.0",
+    "description": "OpenSSH command line entry. Non-interactive, machine-readable, stable exit codes",
+    "license": "Apache-2.0",
+    "type": "module",
+    "engines": {
+        "node": ">=22"
+    },
+    "bin": {
+        "open-ssh": "./dist/cli.js"
+    },
+    "main": "./dist/cli.js",
+    "types": "./dist/cli.d.ts",
+    "files": [
+        "dist",
+        "Readme.md"
+    ],
+    "scripts": {
+        "build": "tsc -p tsconfig.json"
+    },
+    "dependencies": {
+        "@wae/commander": "0.0.5",
+        "@wae/open-ssh": "workspace:*"
+    },
+    "devDependencies": {
+        "@types/node": "^22.20.4",
+        "typescript": "^5.9.2"
+    }
+}

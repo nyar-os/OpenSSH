@@ -1,14 +1,23 @@
 # OS
 .DS_Store/
 thumbs.db
-time-travel.*
 
 # IDE
 .vscode/
 .vs/
 .idea/
 *.iml
+*.log
 
 # Rust
 target/
-Cargo.lock
+
+# Node
+node_modules/
+dist/
+*.node
+*.wasm
+
+# VMZ
+packages/open-ssh-ui/.cache/
+projects/open-ssh.ts/packages/open-ssh-ui/.cache/

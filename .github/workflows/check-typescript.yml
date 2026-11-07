@@ -1,0 +1,30 @@
+name: check-typescript
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+
+jobs:
+  check-typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: pnpm
+      # The template ships without lockfiles. Commit pnpm-lock.yaml after the
+      # first `pnpm install`, otherwise this frozen install fails by design.
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Build TS
+        run: pnpm run build:ts
+      - name: Build UI
+        run: pnpm run build:ui
+      # `wae build` also audits the agent skills against the real CLI tree. That
+      # step needs the Windows-only native platform package, so run it locally
+      # with `pnpm run build` after `npm install --global @wae/wae`.

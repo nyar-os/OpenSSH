@@ -1,0 +1,7 @@
+{
+    "name": "@wae/open-ssh-core",
+    "version": "0.0.0",
+    "private": true,
+    "description": "Rust domain model for OpenSSH: capability states, error codes, and audit vocabulary",
+    "license": "Apache-2.0"
+}

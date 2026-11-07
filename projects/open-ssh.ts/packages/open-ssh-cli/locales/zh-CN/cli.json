@@ -1,0 +1,37 @@
+{
+    "cli": {
+        "intro": "open-ssh — 带传输适配器的远程主机管理器。面向 agent 与人类的非交互 CLI。",
+        "cmd": {
+            "capabilities": "列出能力矩阵与各传输的支持情况",
+            "version": "打印原生插件版本",
+            "audit": "读取当前调用者的审计记录",
+            "gui": "打开 VMZ GUI 窗口并泵送宿主事件直到窗口关闭",
+            "connect": "连接目标并建立会话",
+            "exec": "执行命令并取回 stdout、stderr 与退出码",
+            "transfer": "上传、下载与同步文件",
+            "session": "枚举会话并报告状态",
+            "host-inventory": "清单化并分组管理受管主机",
+            "port-forward": "配置本地、远程与动态端口转发",
+            "key-management": "生成、导入、保护与检查主机密钥",
+            "known-hosts": "校验主机密钥并更新 known hosts 记录",
+            "credential-store": "保存凭据与口令短语",
+            "host-install": "安装宿主集成与桌面入口",
+            "host-uninstall": "移除宿主集成并清理残留状态"
+        },
+        "opt": {
+            "actor": "审计调用者 id（用户或 agent 名称）",
+            "actor-kind": "审计调用者类型",
+            "actor-source": "审计调用者来源（cli、plugin、gui 等）",
+            "json": "在 stdout 输出机器可读 JSON",
+            "transport": "要使用的传输适配器。支持情况按能力单独报告",
+            "dry-run": "只做计划，不改动宿主状态",
+            "kind": "按调用者类型过滤审计记录",
+            "id": "按调用者 id 过滤审计记录",
+            "capability": "按能力 id 过滤审计记录",
+            "from-ms": "按 Unix 毫秒时间戳过滤审计记录的起点",
+            "to-ms": "按 Unix 毫秒时间戳过滤审计记录的终点",
+            "limit": "审计记录的最大数量",
+            "content-dir": "已暂存 GUI 构建的目录"
+        }
+    }
+}

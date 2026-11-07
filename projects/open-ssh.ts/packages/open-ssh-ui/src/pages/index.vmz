@@ -1,0 +1,272 @@
+<template>
+    <div class="app-root" data-app="open-ssh">
+        <aside class="app-rail" aria-label="Navigation">
+            <div class="app-brand">
+                <div class="app-brand__name">
+                    OpenSSH
+                </div>
+                <div class="app-brand__lead">
+                    {{ lead }}
+                </div>
+            </div>
+
+            <nav class="app-nav">
+                <div class="app-nav__label">
+                    {{ transportLabel }}
+                </div>
+                <div v-for="transport in transports" :key="transport.id" class="app-nav__item">
+                    <span class="app-nav__dot" :data-state="transport.state" />
+                    <span>{{ transport.name }}</span>
+                </div>
+            </nav>
+
+            <div class="app-rail__foot">
+                <Button type="button" variant="secondary" @click="closeWindow">
+                    {{ closeLabel }}
+                </Button>
+            </div>
+        </aside>
+
+        <main class="app-content">
+            <div class="app-head">
+                <h1>
+                    {{ title }}
+                </h1>
+                <p>{{ lead }}</p>
+            </div>
+
+            <div class="app-actions">
+                <Button type="button" :loading="loadingCapabilities" :disabled="loadingCapabilities" @click="loadCapabilities">
+                    {{ capabilitiesLabel }}
+                </Button>
+            </div>
+
+            <Alert v-if="error" tone="danger" roleName="alert" :title="errorTitle" :description="error" />
+            <Alert v-else-if="status" tone="info" roleName="status" :title="statusTitle" :description="status" />
+
+            <Empty v-if="!capabilityRows.length && !loadingCapabilities" :title="emptyTitle" :description="emptyDesc" />
+            <Table v-else :columns="capabilityColumns" :rows="capabilityRows" :hasRowAction="false" />
+
+            <p class="app-note">
+                {{ note }}
+            </p>
+        </main>
+    </div>
+</template>
+
+<style>
+.app-root {
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+}
+.app-rail {
+    display: flex;
+    flex: 0 0 15rem;
+    flex-direction: column;
+    gap: 1rem;
+    min-height: 0;
+    padding: 1rem;
+    overflow-y: auto;
+    border-right: 1px solid var(--vmz-line-default, #e5e6eb);
+    background: var(--vmz-surface-mist, var(--vmz-surface-paper, #f7f8fa));
+}
+.app-brand__name {
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+.app-brand__lead {
+    margin-top: 0.35rem;
+    color: var(--vmz-text-steel, #8b93a7);
+    font-size: 0.8rem;
+    line-height: 1.45;
+}
+.app-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.app-nav__label {
+    color: var(--vmz-text-steel, #8b93a7);
+    font-size: 0.7rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+.app-nav__item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+}
+.app-nav__dot {
+    width: 0.45rem;
+    height: 0.45rem;
+    border-radius: var(--vmz-radius-pill, 999px);
+    background: var(--vmz-status-success-accent, #2f9e44);
+}
+.app-nav__dot[data-state='not_implemented'] {
+    background: var(--vmz-status-warning-accent, #d97706);
+}
+.app-rail__foot {
+    margin-top: auto;
+}
+.app-content {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: var(--vmz-space-4, 1rem);
+    min-width: 0;
+    padding: var(--vmz-space-4, 1rem);
+    overflow-y: auto;
+}
+.app-head h1 {
+    margin: 0 0 0.35rem;
+    font-size: 1.35rem;
+}
+.app-head p {
+    margin: 0;
+    color: var(--vmz-text-steel, #8b93a7);
+}
+.app-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+.app-note {
+    margin: 0;
+    color: var(--vmz-text-steel, #8b93a7);
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+</style>
+
+<script client>
+/**
+ * Application page.
+ *
+ * The page renders the capability matrix. Transports are a separate dimension:
+ * capability ids never encode `ssh` or `rdp`, and every row reports per-transport
+ * support. All decisions live in the Rust `core` and `napi` crates.
+ */
+export default class IndexPage {
+    title = "Capability matrix";
+    lead = "Remote host management over transports. A capability is a goal, not a protocol.";
+    transportLabel = "Transports";
+    closeLabel = "Close";
+    capabilitiesLabel = "Refresh capabilities";
+    errorTitle = "Request failed";
+    statusTitle = "Status";
+    emptyTitle = "No capability report yet";
+    emptyDesc = "Refresh to read the capability matrix.";
+    note = "RDP carries connect, session, and drive redirection transfer only. It has no command channel, so `exec` stays not_implemented over RDP.";
+    status = "";
+    error = "";
+    loadingCapabilities = false;
+    transports = [
+        { id: "ssh", name: "SSH", state: "pending" },
+        { id: "rdp", name: "RDP", state: "pending" },
+    ];
+    capabilityColumns = [
+        { id: "id", title: "Capability" },
+        { id: "state", title: "Status" },
+        { id: "ssh", title: "SSH" },
+        { id: "rdp", title: "RDP" },
+        { id: "reason", title: "Reason" },
+    ];
+    capabilityRows = [];
+
+    onMount() {
+        this.installHostBridge();
+        const bridge = globalThis.chrome && globalThis.chrome.webview;
+        if (bridge && bridge.postMessage) this.loadCapabilities();
+    }
+
+    installHostBridge() {
+        const handler = (event) => {
+            let data = event && typeof event === "object" && "data" in event ? event.data : event;
+            if (typeof data === "string") {
+                try {
+                    data = JSON.parse(data);
+                } catch {
+                    return;
+                }
+            }
+            this.handleReply(data);
+        };
+        const bridge = globalThis.chrome && globalThis.chrome.webview;
+        if (bridge && bridge.addEventListener) bridge.addEventListener("message", handler);
+        globalThis.__waeReceive = (text) => {
+            try {
+                handler(JSON.parse(text));
+            } catch {
+                // Ignore malformed host messages.
+            }
+        };
+    }
+
+    post(message) {
+        const payload = JSON.stringify(message);
+        const win = globalThis.chrome && globalThis.chrome.webview;
+        if (win && win.postMessage) {
+            win.postMessage(payload);
+            return true;
+        }
+        const webkit = globalThis.webkit && globalThis.webkit.messageHandlers;
+        if (webkit && webkit.wae) {
+            webkit.wae.postMessage(payload);
+            return true;
+        }
+        this.error = "Native bridge unavailable (open this page through the host).";
+        return false;
+    }
+
+    handleReply(data) {
+        if (!data || typeof data !== "object") return;
+        if (data.ok !== true) {
+            this.loadingCapabilities = false;
+            const failure = data.error;
+            this.error = typeof failure === "string" ? failure : String((failure && failure.message) || "unknown error");
+            this.status = "";
+            return;
+        }
+        const value = data.data || {};
+        if (!Array.isArray(value.items)) {
+            this.loadingCapabilities = false;
+            return;
+        }
+        this.loadingCapabilities = false;
+        this.error = "";
+        this.status = "Capability matrix updated.";
+        this.capabilityRows = value.items.map((item, index) => ({
+            id: String(index),
+            cells: [
+                String(item.id || ""),
+                String(item.state || "supported"),
+                this.transportState(item, "ssh"),
+                this.transportState(item, "rdp"),
+                String(item.reason || ""),
+            ],
+        }));
+        const known = Array.isArray(value.transports) ? value.transports : [];
+        this.transports = ["ssh", "rdp"].map((id) => ({ id, name: id.toUpperCase(), state: known.includes(id) ? "registered" : "unknown" }));
+    }
+
+    /** Per-transport state, `supported` when the row carries no refusal. */
+    transportState(item, transport) {
+        const rows = Array.isArray(item.transports) ? item.transports : [];
+        const row = rows.find((entry) => entry.transport === transport);
+        if (!row) return "—";
+        return row.state === null || row.state === undefined ? "supported" : String(row.state);
+    }
+
+    loadCapabilities() {
+        this.loadingCapabilities = true;
+        this.error = "";
+        if (!this.post({ type: "capabilities" })) this.loadingCapabilities = false;
+    }
+
+    closeWindow() {
+        this.post({ type: "close" });
+    }
+}
+</script>
