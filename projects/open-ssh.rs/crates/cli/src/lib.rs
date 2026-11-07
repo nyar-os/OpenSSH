@@ -176,6 +176,11 @@ impl CliResult {
     }
 }
 
+/// Capabilities that the meta commands already expose. They must not be
+/// repeated as domain commands.
+const META_CAPABILITIES: [&str; 4] =
+    [capability_ids::CAPABILITIES, capability_ids::VERSION, capability_ids::AUDIT_QUERY, capability_ids::AUDIT_CONFIGURE];
+
 /// Build the CLI contract. Domain commands inherit the state of their capability row.
 pub fn contract() -> CliContract {
     let report = capabilities();
@@ -185,7 +190,7 @@ pub fn contract() -> CliContract {
         CommandRow { id: command::AUDIT, capability: capability_ids::AUDIT_QUERY, kind: "meta", state: None, code: None },
         CommandRow { id: command::GUI, capability: "gui", kind: "meta", state: None, code: None },
     ];
-    commands.extend(report.items.iter().filter(|item| item.state.is_some()).map(|item| CommandRow {
+    commands.extend(report.items.iter().filter(|item| !META_CAPABILITIES.contains(&item.id)).map(|item| CommandRow {
         id: item.id,
         capability: item.id,
         kind: "domain",
@@ -255,12 +260,19 @@ mod tests {
         for row in &contract.commands {
             assert!(!ids.contains(&row.id), "duplicate command id: {}", row.id);
             ids.push(row.id);
-            if row.kind == "domain" {
-                assert_eq!(row.state, Some(CapabilityState::NotImplemented));
-                assert_eq!(row.code, Some("not_implemented"));
-            }
-            else {
-                assert_eq!(row.state, None);
+            match (row.kind, row.capability) {
+                ("domain", capability_ids::EXEC) => {
+                    assert_eq!(row.state, None, "`exec` must be exposed as available");
+                    assert_eq!(row.code, None);
+                }
+                ("domain", _) => {
+                    assert_eq!(row.state, Some(CapabilityState::NotImplemented));
+                    assert_eq!(row.code, Some("not_implemented"));
+                }
+                (_, _) => {
+                    assert_eq!(row.state, None);
+                    assert_eq!(row.code, None);
+                }
             }
         }
         assert_eq!(contract.exit_codes.len(), 5);

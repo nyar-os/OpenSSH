@@ -104,7 +104,7 @@ const NO_KNOWN_HOSTS: Option<CapabilityState> = Some(CapabilityState::NotImpleme
 
 const CONNECT_TRANSPORTS: &[TransportSpec] = &[("ssh", SUPPORTS, "planned"), ("rdp", SUPPORTS, "planned")];
 const EXEC_TRANSPORTS: &[TransportSpec] = &[
-    ("ssh", SUPPORTS, "planned"),
+    ("ssh", SUPPORTS, "Supported in-process with a pinned host key."),
     ("rdp", NO_EXEC, "RDP has no command channel. The protocol carries graphics, input, clipboard, and redirection channels only."),
 ];
 const TRANSFER_TRANSPORTS: &[TransportSpec] = &[("ssh", SUPPORTS, "SFTP"), ("rdp", SUPPORTS, "drive redirection")];

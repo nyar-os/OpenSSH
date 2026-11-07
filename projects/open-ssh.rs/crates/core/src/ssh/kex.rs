@@ -11,9 +11,11 @@ use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::errors::{Error, ErrorCode};
 
-use super::wire::{Reader, Writer, encode_mpint};
-use super::transport::{AesGcmState, Transport};
-use super::Result;
+use super::{
+    Result,
+    transport::{AesGcmState, Transport},
+    wire::{Reader, Writer, encode_mpint},
+};
 
 /// Message numbers used during key exchange.
 const MSG_DISCONNECT: u8 = 1;
@@ -206,10 +208,7 @@ fn require_list(category: &str, offered: &[String], required: &str) -> Result<()
     if offered.iter().any(|name| name == required) {
         return Ok(());
     }
-    Err(Error::new(
-        ErrorCode::NegotiationFailed,
-        format!("the server offers no admitted {category} algorithm, so `{required}` cannot be used"),
-    ))
+    Err(Error::new(ErrorCode::NegotiationFailed, format!("the server offers no admitted {category} algorithm, so `{required}` cannot be used")))
 }
 
 fn ephemeral_secret() -> Result<StaticSecret> {
@@ -218,7 +217,7 @@ fn ephemeral_secret() -> Result<StaticSecret> {
     Ok(StaticSecret::from(bytes))
 }
 
-fn exchange_hash(
+pub(crate) fn exchange_hash(
     transport: &Transport,
     host_key: &[u8],
     client_public: &[u8],
@@ -252,31 +251,26 @@ fn verify_signature(host_key: &[u8], signature: &[u8], exchange_hash: &[u8]) -> 
         ));
     }
     let key_bytes = key_reader.string()?;
-    let key_array: [u8; 32] = key_bytes
-        .try_into()
-        .map_err(|_| Error::new(ErrorCode::ProtocolError, "the server host key has the wrong length"))?;
+    let key_array: [u8; 32] =
+        key_bytes.try_into().map_err(|_| Error::new(ErrorCode::ProtocolError, "the server host key has the wrong length"))?;
     let verifying = VerifyingKey::from_bytes(&key_array)
         .map_err(|_| Error::new(ErrorCode::ProtocolError, "the server host key is not a valid ed25519 point"))?;
 
     let mut signature_reader = Reader::new(signature);
     let signature_algorithm = signature_reader.string()?;
     if signature_algorithm != HOST_KEY_ALGORITHM.as_bytes() {
-        return Err(Error::new(
-            ErrorCode::NegotiationFailed,
-            "the exchange hash is not signed with the negotiated host key algorithm",
-        ));
+        return Err(Error::new(ErrorCode::NegotiationFailed, "the exchange hash is not signed with the negotiated host key algorithm"));
     }
     let signature_bytes = signature_reader.string()?;
-    let signature_array: [u8; 64] = signature_bytes
-        .try_into()
-        .map_err(|_| Error::new(ErrorCode::ProtocolError, "the exchange hash signature has the wrong length"))?;
+    let signature_array: [u8; 64] =
+        signature_bytes.try_into().map_err(|_| Error::new(ErrorCode::ProtocolError, "the exchange hash signature has the wrong length"))?;
     let signature = Signature::from_bytes(&signature_array);
     verifying
         .verify_strict(exchange_hash, &signature)
         .map_err(|_| Error::new(ErrorCode::ProtocolError, "the exchange hash signature does not verify against the host key"))
 }
 
-fn derive(letter: u8, shared_mpint: &[u8], exchange_hash: &[u8], session_id: &[u8], len: usize) -> Result<Vec<u8>> {
+pub(crate) fn derive(letter: u8, shared_mpint: &[u8], exchange_hash: &[u8], session_id: &[u8], len: usize) -> Result<Vec<u8>> {
     if len > 32 {
         return Err(Error::new(ErrorCode::Internal, "key derivation beyond one SHA-256 block is not implemented"));
     }

@@ -11,10 +11,15 @@ This crate owns the shared vocabulary that every consumer uses:
 - the redacted audit fields written to `wae.audit/v0`
 - the host platform descriptor
 
-It contains no platform `cfg` branches, no I/O, no process spawning, and no
-protocol implementation. The skeleton round registers every domain capability
-as `not_implemented` with a stable code so no caller can mistake an unimplemented
-path for a successful one.
+It contains no platform `cfg` branches and starts no process. The `ssh` module
+implements the SSH transport in-process: packet framing, negotiation,
+`curve25519-sha256` key exchange, host key verification, user authentication,
+and the session channel. Only cryptographic primitives come from crates.
+
+`exec` is available over `ssh`. Every other domain capability is registered as
+`not_implemented` with a stable code so no caller can mistake an unimplemented
+path for a successful one. Host keys are never trusted on first use: `exec`
+requires an explicit `SHA256:` pin.
 
 ## Capability states
 

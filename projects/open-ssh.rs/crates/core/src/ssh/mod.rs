@@ -8,13 +8,17 @@
 
 mod auth;
 mod channel;
+#[cfg(test)]
+mod fixture;
 mod identity;
 mod kex;
 mod transport;
 mod wire;
 
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -99,22 +103,57 @@ pub struct ExecResult {
     pub duration_ms: u64,
 }
 
+/// What one `exec` call would do, resolved without opening a connection.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecPreview {
+    /// Transport adapter that would serve the call.
+    pub transport: &'static str,
+    /// Truncated SHA-256 of the target host, safe for audit.
+    pub host_hash: String,
+    /// Target port.
+    pub port: u16,
+    /// Remote user name.
+    pub user: String,
+    /// Authentication method that would be used.
+    pub auth_method: &'static str,
+    /// Byte length of the command that would be sent.
+    pub command_bytes: usize,
+    /// Pinned fingerprint in `SHA256:` notation.
+    pub host_key_sha256: String,
+    /// Deadline in milliseconds.
+    pub timeout_ms: u64,
+}
+
+/// Resolve an `exec` request without connecting.
+pub fn preview(request: &ExecRequest) -> Result<ExecPreview> {
+    validate(request)?;
+    Ok(ExecPreview {
+        transport: "ssh",
+        host_hash: host_hash(&request.host),
+        port: request.port,
+        user: request.user.clone(),
+        auth_method: request.auth.name(),
+        command_bytes: request.command.len(),
+        host_key_sha256: format!("SHA256:{}", normalize_pin(&request.host_key_sha256)),
+        timeout_ms: request.timeout.as_millis() as u64,
+    })
+}
+
 /// Run one command over the `ssh` transport.
 pub fn execute(request: ExecRequest) -> Result<ExecResult> {
     validate(&request)?;
     let pin = normalize_pin(&request.host_key_sha256);
     let method = match &request.auth {
         ExecAuth::Password(password) => auth::AuthMethod::Password(password.clone()),
-        ExecAuth::Identity(path) => {
-            auth::AuthMethod::PublicKey(identity::Ed25519Identity::load(path)?)
-        }
+        ExecAuth::Identity(path) => auth::AuthMethod::PublicKey(identity::Ed25519Identity::load(path)?),
     };
     let started = Instant::now();
 
     let mut transport = transport::Transport::connect(&request.host, request.port, request.timeout)?;
     transport.exchange_versions()?;
     let handshake = kex::handshake(&mut transport)?;
-    if pin != handshake.fingerprint {
+    if handshake.fingerprint != format!("SHA256:{pin}") {
         return Err(Error::new(
             ErrorCode::HostKeyMismatch,
             format!("the server host key is `{}` but the pinned fingerprint is `SHA256:{pin}`", handshake.fingerprint),
@@ -235,9 +274,101 @@ mod tests {
     }
 
     #[test]
+    fn preview_resolves_without_connecting() {
+        let preview = preview(&request()).expect("preview");
+        assert_eq!(preview.transport, "ssh");
+        assert_eq!(preview.port, 22);
+        assert_eq!(preview.user, "operator");
+        assert_eq!(preview.auth_method, "password");
+        assert_eq!(preview.host_key_sha256, "SHA256:abc");
+        assert_eq!(preview.command_bytes, "uname -a".len());
+        assert_eq!(preview.timeout_ms, 1000);
+    }
+
+    #[test]
     fn host_hashes_are_short_and_stable() {
         let hash = host_hash("example.invalid");
         assert_eq!(hash.len(), 12);
         assert_eq!(hash, host_hash("example.invalid"));
+    }
+
+    fn loopback_request(fixture: &fixture::Fixture, auth: ExecAuth) -> ExecRequest {
+        ExecRequest {
+            transport: "ssh".to_string(),
+            host: fixture.addr.ip().to_string(),
+            port: fixture.addr.port(),
+            user: "operator".to_string(),
+            command: "uname -a".to_string(),
+            auth,
+            host_key_sha256: fixture.pin.clone(),
+            timeout: Duration::from_secs(10),
+        }
+    }
+
+    #[test]
+    fn exec_over_loopback_returns_output_and_the_remote_exit_status() {
+        let fixture = fixture::Fixture::start(fixture::FixtureAuth::Password("secret"), ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]));
+        let result = execute(loopback_request(&fixture, ExecAuth::Password("secret".to_string()))).expect("loopback exec");
+        assert_eq!(result.stdout, fixture.stdout);
+        assert_eq!(result.stderr, fixture.stderr);
+        assert_eq!(result.exit_code, Some(fixture.exit_status as i32));
+        assert_eq!(result.stdout_bytes, fixture.stdout.len());
+        assert_eq!(result.stderr_bytes, fixture.stderr.len());
+        assert_eq!(result.auth_method, "password");
+        assert_eq!(result.transport, "ssh");
+        assert_eq!(result.host_hash, host_hash(&fixture.addr.ip().to_string()));
+        fixture.wait();
+    }
+
+    #[test]
+    fn exec_over_loopback_accepts_an_openssh_identity_file() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[5u8; 32]);
+        let fixture = fixture::Fixture::start(fixture::FixtureAuth::PublicKey, key.clone());
+        let path = std::env::temp_dir().join(format!("wae-open-ssh-id-{}.key", std::process::id()));
+        std::fs::write(&path, identity::document(&key, b"none", b"none", "loopback")).expect("write identity");
+        let result = execute(loopback_request(&fixture, ExecAuth::Identity(path.clone()))).expect("loopback exec");
+        assert_eq!(result.auth_method, "publickey");
+        assert_eq!(result.exit_code, Some(fixture.exit_status as i32));
+        assert_eq!(result.stdout, fixture.stdout);
+        let _ = std::fs::remove_file(&path);
+        fixture.wait();
+    }
+
+    #[test]
+    fn a_mismatched_pin_fails_with_host_key_mismatch() {
+        let fixture = fixture::Fixture::start(fixture::FixtureAuth::Password("secret"), ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]));
+        let mut request = loopback_request(&fixture, ExecAuth::Password("secret".to_string()));
+        request.host_key_sha256 = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string();
+        let error = execute(request).expect_err("a wrong pin must fail");
+        assert_eq!(error.code(), ErrorCode::HostKeyMismatch);
+        assert!(error.message().contains("SHA256:"));
+        fixture.wait();
+    }
+
+    #[test]
+    fn a_wrong_password_fails_with_auth_failed() {
+        let fixture = fixture::Fixture::start(fixture::FixtureAuth::Password("secret"), ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]));
+        let error = execute(loopback_request(&fixture, ExecAuth::Password("wrong".to_string()))).expect_err("wrong password must fail");
+        assert_eq!(error.code(), ErrorCode::AuthFailed);
+        fixture.wait();
+    }
+
+    #[test]
+    fn a_closed_port_fails_with_connect_failed() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        let address = listener.local_addr().expect("address");
+        drop(listener);
+        let request = ExecRequest {
+            transport: "ssh".to_string(),
+            host: address.ip().to_string(),
+            port: address.port(),
+            user: "operator".to_string(),
+            command: "true".to_string(),
+            auth: ExecAuth::Password("secret".to_string()),
+            host_key_sha256: "SHA256:abc".to_string(),
+            timeout: Duration::from_secs(5),
+        };
+        let error = execute(request).expect_err("a closed port must fail");
+        assert_eq!(error.code(), ErrorCode::ConnectFailed);
     }
 }

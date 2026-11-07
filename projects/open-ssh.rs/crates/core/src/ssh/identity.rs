@@ -11,8 +11,10 @@ use ed25519_dalek::{Signer, SigningKey};
 
 use crate::errors::{Error, ErrorCode};
 
-use super::wire::{Reader, Writer};
-use super::Result;
+use super::{
+    Result,
+    wire::{Reader, Writer},
+};
 
 /// Algorithm name used in key and signature blobs.
 pub const ALGORITHM: &str = "ssh-ed25519";
@@ -119,14 +121,42 @@ impl Ed25519Identity {
 }
 
 fn between_markers(text: &str) -> Result<String> {
-    let start = text
-        .find(BEGIN)
-        .ok_or_else(|| Error::new(ErrorCode::IdentityRejected, "identity file has no OpenSSH private key header"))?;
+    let start = text.find(BEGIN).ok_or_else(|| Error::new(ErrorCode::IdentityRejected, "identity file has no OpenSSH private key header"))?;
     let rest = &text[start + BEGIN.len()..];
-    let end = rest
-        .find(END)
-        .ok_or_else(|| Error::new(ErrorCode::IdentityRejected, "identity file has no OpenSSH private key footer"))?;
+    let end = rest.find(END).ok_or_else(|| Error::new(ErrorCode::IdentityRejected, "identity file has no OpenSSH private key footer"))?;
     Ok(rest[..end].chars().filter(|character| !character.is_whitespace()).collect())
+}
+
+/// Render an `openssh-key-v1` document. Test-only, used by the loopback fixture.
+#[cfg(test)]
+pub(crate) fn document(signing: &SigningKey, cipher: &[u8], kdf: &[u8], comment: &str) -> String {
+    let seed = signing.to_bytes();
+    let public = signing.verifying_key().to_bytes();
+
+    let mut public_blob = Writer::empty();
+    public_blob.string(ALGORITHM.as_bytes()).string(&public);
+
+    let mut secret = Vec::with_capacity(64);
+    secret.extend_from_slice(&seed);
+    secret.extend_from_slice(&public);
+
+    let mut section = Writer::empty();
+    section.u32(0x1234_5678).u32(0x1234_5678);
+    section.string(ALGORITHM.as_bytes()).string(&public).string(&secret).string(comment.as_bytes());
+    let mut section = section.finish();
+    let mut padding = 1u8;
+    while section.len() % 8 != 0 {
+        section.push(padding);
+        padding += 1;
+    }
+
+    let mut document = Writer::empty();
+    document.string(cipher).string(kdf).string(b"").u32(1);
+    document.string(&public_blob.finish()).string(&section);
+    let mut encoded = MAGIC.to_vec();
+    encoded.extend_from_slice(&document.finish());
+    let body = base64::engine::general_purpose::STANDARD.encode(encoded);
+    format!("{BEGIN}\n{body}\n{END}\n")
 }
 
 #[cfg(test)]
@@ -139,34 +169,9 @@ mod tests {
     }
 
     fn fixture_with(cipher: &[u8], kdf: &[u8]) -> (String, [u8; 32]) {
-        let seed = [7u8; 32];
-        let signing = SigningKey::from_bytes(&seed);
+        let signing = SigningKey::from_bytes(&[7u8; 32]);
         let public = signing.verifying_key().to_bytes();
-
-        let mut public_blob = Writer::empty();
-        public_blob.string(ALGORITHM.as_bytes()).string(&public);
-
-        let mut secret = Vec::with_capacity(64);
-        secret.extend_from_slice(&seed);
-        secret.extend_from_slice(&public);
-
-        let mut section = Writer::empty();
-        section.u32(0x1234_5678).u32(0x1234_5678);
-        section.string(ALGORITHM.as_bytes()).string(&public).string(&secret).string(b"fixture");
-        let mut section = section.finish();
-        let mut padding = 1u8;
-        while section.len() % 8 != 0 {
-            section.push(padding);
-            padding += 1;
-        }
-
-        let mut document = Writer::empty();
-        document.string(cipher).string(kdf).string(b"").u32(1);
-        document.string(&public_blob.finish()).string(&section);
-        let mut encoded = MAGIC.to_vec();
-        encoded.extend_from_slice(&document.finish());
-        let body = base64::engine::general_purpose::STANDARD.encode(encoded);
-        (format!("{BEGIN}\n{body}\n{END}\n"), public)
+        (document(&signing, cipher, kdf, "fixture"), public)
     }
 
     #[test]

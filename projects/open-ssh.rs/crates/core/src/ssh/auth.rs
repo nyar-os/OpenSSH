@@ -2,10 +2,12 @@
 
 use crate::errors::{Error, ErrorCode};
 
-use super::identity::{Ed25519Identity, ALGORITHM};
-use super::wire::{Reader, Writer};
-use super::transport::Transport;
-use super::Result;
+use super::{
+    Result,
+    identity::{ALGORITHM, Ed25519Identity},
+    transport::Transport,
+    wire::{Reader, Writer},
+};
 
 const MSG_DISCONNECT: u8 = 1;
 const MSG_IGNORE: u8 = 2;
