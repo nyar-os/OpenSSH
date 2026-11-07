@@ -25,11 +25,30 @@ export interface NativeExecOptions {
     dryRun?: boolean;
 }
 
+/** Options accepted by the native `transfer` export. */
+export interface NativeTransferOptions {
+    transport?: string;
+    host: string;
+    port?: number;
+    user: string;
+    direction: 'upload' | 'download' | 'list';
+    remotePath: string;
+    localPath?: string;
+    password?: string;
+    identityPath?: string;
+    hostKeySha256?: string;
+    timeoutMs?: number;
+    resume?: boolean;
+    progress?: boolean;
+    dryRun?: boolean;
+}
+
 /** Raw surface exported by the Rust `napi` crate. */
 export interface NativeBindings {
     version(): string;
     capabilities(): unknown;
     exec(options: NativeExecOptions): unknown;
+    transfer(options: NativeTransferOptions): unknown;
     invoke(capability: string, transport?: string): unknown;
     cliContract(): unknown;
     openGui(options?: { contentDir?: string; title?: string }): unknown;

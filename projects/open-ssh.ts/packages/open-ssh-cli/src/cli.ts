@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 import { createCli, type CommandContext, type ParsedOptions } from '@wae/commander';
 
-import { AppError, fromNativeError, invokeCapability, exec, capabilities, configureAudit, auditQuery, runGui, version, type CapabilityItem, type ExecPreview, type ExecResult, type Transport } from '@wae/open-ssh';
+import { AppError, fromNativeError, invokeCapability, exec, transfer as transferFiles, capabilities, configureAudit, auditQuery, runGui, version, type CapabilityItem, type ExecPreview, type ExecResult, type TransferDirection, type TransferPreview, type TransferResult, type Transport } from '@wae/open-ssh';
 
 import { loadRuntimeContract, type ActorChannel } from './runtime.js';
 
@@ -132,6 +132,7 @@ function exitFor(code: string | undefined): number {
         case 'dependency_blocked':
             return EXIT.CAPABILITY;
         case 'invalid_argument':
+        case 'path_rejected':
         case 'unknown_command':
             return EXIT.USAGE;
         case 'canceled':
@@ -292,6 +293,43 @@ function writeExecResult(result: ExecResult, host: string, ctx: CommandContext):
     );
 }
 
+function formatTransferPreview(preview: TransferPreview, host: string): string {
+    const lines = [
+        'dry-run: no connection opened, no bytes moved',
+        `transport\t${preview.transport}`,
+        `target\t${preview.user}@${host}:${preview.port}`,
+        `auth\t${preview.authMethod}`,
+        `host-key\t${preview.hostKeySha256}`,
+        `direction\t${preview.direction}`,
+        `remote\t${preview.remotePath}`,
+        `resume\t${preview.resume ? 'yes' : 'no'}`,
+        `timeout\t${preview.timeoutMs} ms`,
+    ];
+    if (preview.localPath !== null) lines.push(`local\t${preview.localPath}`);
+    if (preview.plannedBytes !== null) lines.push(`planned\t${preview.plannedBytes} bytes`);
+    return lines.join('\n');
+}
+
+/** Write a listing on stdout and the exact counters on stderr. */
+function writeTransferResult(result: TransferResult, host: string, ctx: CommandContext): void {
+    if (result.direction === 'list') {
+        const lines = result.entries.map((entry) => (entry.isDir ? `${entry.name}\tdir` : `${entry.name}\t${entry.size} bytes`));
+        if (lines.length) ctx.stdout(lines.join('\n'));
+    }
+    const summary = result.direction === 'list'
+        ? `transfer: ${result.entries.length} entries · ${result.durationMs} ms · ${result.user}@${host}:${result.port} over ${result.transport}`
+        : `transfer: ${result.bytes} bytes${result.resumedFrom ? ` (resumed at ${result.resumedFrom})` : ''} · ${result.durationMs} ms · ${result.user}@${host}:${result.port} over ${result.transport}`;
+    ctx.stderr(summary);
+}
+
+function directionOption(options: ParsedOptions): TransferDirection {
+    const raw = requiredOption(options, 'direction');
+    if (raw !== 'upload' && raw !== 'download' && raw !== 'list') {
+        throw new AppError({ code: 'invalid_argument', message: '`--direction` must be `upload`, `download`, or `list`' });
+    }
+    return raw;
+}
+
 cli.command('exec', 'cli.cmd.exec')
     .option('--transport <transport>', 'cli.opt.transport', { enum: ['ssh', 'rdp'] })
     .option('--host <host>', 'cli.opt.host')
@@ -338,9 +376,60 @@ cli.command('exec', 'cli.cmd.exec')
         }
     });
 
+cli.command('transfer', 'cli.cmd.transfer')
+    .option('--transport <transport>', 'cli.opt.transport', { enum: ['ssh', 'rdp'] })
+    .option('--direction <direction>', 'cli.opt.direction', { enum: ['upload', 'download', 'list'] })
+    .option('--host <host>', 'cli.opt.host')
+    .option('--port <n>', 'cli.opt.port')
+    .option('--user <user>', 'cli.opt.user')
+    .option('--local <path>', 'cli.opt.local')
+    .option('--remote <path>', 'cli.opt.remote')
+    .option('--identity <path>', 'cli.opt.identity')
+    .option('--password-env <name>', 'cli.opt.password-env')
+    .option('--host-key-sha256 <pin>', 'cli.opt.host-key-sha256')
+    .option('--timeout-ms <n>', 'cli.opt.timeout-ms')
+    .option('--resume', 'cli.opt.resume')
+    .option('--progress', 'cli.opt.progress')
+    .option('--dry-run', 'cli.opt.dry-run')
+    .actionCtx(async (options, _args, ctx) => {
+        try {
+            bootstrap(options);
+            const host = requiredOption(options, 'host');
+            const request = {
+                transport: transportOption(options, true),
+                host,
+                port: integerOption(options, 'port') ?? 22,
+                user: requiredOption(options, 'user'),
+                direction: directionOption(options),
+                remotePath: requiredOption(options, 'remote'),
+                localPath: stringOption(options, 'local'),
+                ...credentials(options),
+                hostKeySha256: stringOption(options, 'host-key-sha256'),
+                timeoutMs: integerOption(options, 'timeout-ms'),
+                resume: flag(options, 'resume'),
+                progress: flag(options, 'progress'),
+            };
+            if (flag(options, 'dry-run')) {
+                const preview = transferFiles({ ...request, dryRun: true });
+                emit(options, ctx, preview, formatTransferPreview(preview, host));
+                return EXIT.OK;
+            }
+            const result = transferFiles(request);
+            if (flag(options, 'json')) {
+                emit(options, ctx, result, '');
+            }
+            else {
+                writeTransferResult(result, host, ctx);
+            }
+            return EXIT.OK;
+        }
+        catch (error) {
+            return fail(options, ctx, error);
+        }
+    });
+
 for (const [id, requiredTransport, mutating] of [
     ['connect', true, false],
-    ['transfer', true, true],
     ['session', true, false],
     ['host-inventory', false, false],
     ['port-forward', false, false],

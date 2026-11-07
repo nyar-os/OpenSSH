@@ -1,6 +1,6 @@
 ---
 name: workflow
-description: Drive the transport-neutral OpenSSH CLI to read the capability matrix, run one command over SSH, and preview file transfer without touching host state.
+description: Drive the transport-neutral OpenSSH CLI to read the capability matrix, run one command over SSH, and upload, download, or list files over SFTP.
 ---
 
 # OpenSSH agent workflow
@@ -45,8 +45,9 @@ from a capability id. Read the per-transport rows in the report.
 
 ## Command execution over SSH
 
-`exec` is the only available domain capability. It needs an explicit host key
-pin; the product never trusts an unknown key and never offers TOFU.
+`exec` and `transfer` are the available domain capabilities. Both need an
+explicit host key pin; the product never trusts an unknown key and never offers
+TOFU.
 
 6. Preview first. The preview resolves the target and the pin without opening a
    connection.
@@ -71,17 +72,30 @@ pin; the product never trusts an unknown key and never offers TOFU.
 
 ## File transfer
 
-Transfer stays `not_implemented` in this round. Preview the plan first and show
-it to the user. RDP transfer uses drive redirection and SSH transfer uses SFTP.
-The channel is selected by `--transport`, never by a capability id.
+`transfer` moves one SFTP path over the same SSH connection and authentication
+path as `exec`. `--direction` selects `upload`, `download`, or `list`. RDP
+transfer needs drive redirection and stays `not_implemented`, so
+`--transport=rdp` is refused.
 
-4. Preview. `--dry-run` must come before any apply form.
+9. Preview first. `--dry-run` resolves the normalized paths, planned bytes, and
+   pin without opening a connection or moving any bytes.
 
-   `open-ssh transfer --transport=<ssh|rdp> --dry-run --json`
+   `open-ssh transfer --transport=ssh --host=<host> --user=<user> --direction=upload --local=<path> --remote=<path> --identity=<path> --host-key-sha256=<SHA256:...> --dry-run --json`
 
-5. Apply only after explicit confirmation. Overwrites and deletions are
-   confirmed individually. Deleting a file the tool just uploaded is an
-   explicit action and is never automatic.
+10. Apply only after explicit confirmation. `--resume` continues from the bytes
+    already present on the other side. `--progress` writes human-readable
+    progress to stderr while `--json` keeps stdout machine-readable.
+
+    `open-ssh transfer --transport=ssh --host=<host> --user=<user> --direction=upload --local=<path> --remote=<path> --resume --progress --password-env=<VAR> --host-key-sha256=<SHA256:...> --json`
+
+11. Read `data.bytes`, `data.resumedFrom`, and `data.durationMs`. A listing
+    returns sorted `data.entries` with `name`, `size`, and `isDir`. Paths that
+    escape with `..`, are empty, or are blank are refused with `path_rejected`.
+
+12. Error codes are distinct: `remote_not_found`, `permission_denied`,
+    `disk_full`, `connection_lost`, `transfer_failed`, and `path_rejected`. Do
+    not collapse them into one retry rule. Resume only after `connection_lost`
+    and only with the same source and destination.
 
 ## Audit
 
@@ -93,9 +107,9 @@ id and the transport as separate fields. Use `--actor-kind agent` and a stable
 
 ## Safety
 
-- `exec` is available over `ssh` only. Every other domain capability refuses
-  with `not_implemented`. A refusal is not a success. Do not fall back to an
-  external `ssh`, `sftp`, `scp`, `mstsc`, or `winrs` process.
+- `exec` and `transfer` are available over `ssh` only. Every other domain
+  capability refuses with `not_implemented`. A refusal is not a success. Do not
+  fall back to an external `ssh`, `sftp`, `scp`, `mstsc`, or `winrs` process.
 - Do not execute a mutating command without explicit confirmation（确认）from the
   user after the dry-run preview.
 - Do not retry a structured capability failure with elevated privileges. Report

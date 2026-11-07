@@ -144,6 +144,76 @@ export interface ExecPreview {
     timeoutMs: number;
 }
 
+/** Which way bytes move in one `transfer` call. */
+export type TransferDirection = 'upload' | 'download' | 'list';
+
+/** One entry returned by a directory listing. */
+export interface TransferEntry {
+    name: string;
+    size: number;
+    isDir: boolean;
+}
+
+/** One `transfer` request. `ssh` is the only transport that carries it. */
+export interface TransferRequest {
+    transport?: Transport;
+    host: string;
+    port?: number;
+    user: string;
+    direction: TransferDirection;
+    /** Remote file or directory. Escapes and empty values are refused. */
+    remotePath: string;
+    /** Local file for upload and download. Ignored for listings. */
+    localPath?: string;
+    /** Remote password. Mutually exclusive with `identityPath`. */
+    password?: string;
+    /** Path to an unencrypted `ssh-ed25519` private key. */
+    identityPath?: string;
+    /** Required `SHA256:` host key fingerprint. */
+    hostKeySha256?: string;
+    timeoutMs?: number;
+    /** Continue from the bytes already present on the other side. */
+    resume?: boolean;
+    /** Write human-readable progress to stderr while bytes move. */
+    progress?: boolean;
+}
+
+/** Result of one successful `transfer` call. */
+export interface TransferResult {
+    transport: 'ssh';
+    hostHash: string;
+    port: number;
+    user: string;
+    authMethod: ExecAuthMethod;
+    direction: TransferDirection;
+    remotePath: string;
+    localPath: string | null;
+    /** Bytes moved by this call, excluding any resumed prefix. */
+    bytes: number;
+    /** Offset this call resumed from. */
+    resumedFrom: number;
+    /** Directory entries, empty for uploads and downloads. */
+    entries: TransferEntry[];
+    durationMs: number;
+}
+
+/** What a `--dry-run` `transfer` resolves without connecting. */
+export interface TransferPreview {
+    transport: 'ssh';
+    hostHash: string;
+    port: number;
+    user: string;
+    authMethod: ExecAuthMethod;
+    direction: TransferDirection;
+    remotePath: string;
+    localPath: string | null;
+    resume: boolean;
+    /** Local file size for uploads, `null` when only the server knows. */
+    plannedBytes: number | null;
+    hostKeySha256: string;
+    timeoutMs: number;
+}
+
 function invoke<T>(run: () => T): T {
     try {
         return run();
@@ -177,15 +247,30 @@ export function exec(request: ExecRequest & { dryRun?: boolean }): ExecResult | 
 }
 
 /**
+ * Upload, download, or list files over `ssh`.
+ *
+ * `resume` continues from the bytes already present on the target side.
+ * `progress` writes human progress to stderr while the result keeps the exact
+ * `bytes` and `resumedFrom` for machine readers. Failures keep distinct codes:
+ * `remote_not_found`, `permission_denied`, `disk_full`, `connection_lost`, and
+ * `path_rejected`.
+ */
+export function transfer(request: TransferRequest & { dryRun: true }): TransferPreview;
+export function transfer(request: TransferRequest & { dryRun?: false }): TransferResult;
+export function transfer(request: TransferRequest & { dryRun?: boolean }): TransferResult | TransferPreview {
+    return invoke(() => loadNative().transfer({ ...request }) as TransferResult | TransferPreview);
+}
+
+/**
  * Resolve one domain capability by its stable id.
  *
  * `transport` is a separate dimension and never part of the id. Passing one
  * selects a more precise refusal, for example `exec` over `rdp` reports that RDP
  * has no command channel.
  *
- * `exec` is the only available domain capability and has its own `exec()`
- * export. Every other capability still refuses with its stable code. Callers
- * must not treat an exception here as a successful result.
+ * `exec` and `transfer` are the available domain capabilities and have their
+ * own exports. Every other capability still refuses with its stable code.
+ * Callers must not treat an exception here as a successful result.
  */
 export function invokeCapability<T = unknown>(capability: string, transport?: Transport): T {
     return invoke(() => loadNative().invoke(capability, transport) as T);
