@@ -539,7 +539,8 @@ mod tests {
         assert!(gui.transports.is_empty());
         assert!(report.notes.iter().any(|note| note.contains("dependency_blocked")));
         assert!(report.get(capability_ids::EXEC).expect("exec row").is_available());
-        for id in [capability_ids::HOST_INSTALL, capability_ids::HOST_UNINSTALL, capability_ids::TRANSFER] {
+        assert!(report.get(capability_ids::TRANSFER).expect("transfer row").is_available());
+        for id in [capability_ids::HOST_INSTALL, capability_ids::HOST_UNINSTALL, capability_ids::PORT_FORWARD] {
             let item = report.get(id).unwrap_or_else(|| panic!("missing capability row: {id}"));
             assert!(!item.is_available());
             assert!(!item.reason.is_empty());
@@ -549,7 +550,7 @@ mod tests {
 
     #[test]
     fn invoke_refuses_every_unavailable_domain_capability_with_its_stable_code() {
-        for id in [capability_ids::CONNECT, capability_ids::TRANSFER, capability_ids::SESSION, capability_ids::HOST_INVENTORY] {
+        for id in [capability_ids::CONNECT, capability_ids::SESSION, capability_ids::HOST_INVENTORY] {
             let error = invoke_error(id, None);
             assert_eq!(error.code(), ErrorCode::NotImplemented);
             assert_eq!(error.capability(), Some(id));

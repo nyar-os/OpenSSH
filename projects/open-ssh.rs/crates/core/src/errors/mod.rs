@@ -68,6 +68,18 @@ pub enum ErrorCode {
     ProtocolError,
     /// The session channel or the exec request failed after connecting.
     ExecFailed,
+    /// The remote path does not exist.
+    RemoteNotFound,
+    /// The remote side refused an operation on permission grounds.
+    PermissionDenied,
+    /// The remote or local file system reported that it is out of space.
+    DiskFull,
+    /// The connection dropped while a transfer was in flight.
+    ConnectionLost,
+    /// A transfer failed for a reason the server did not classify.
+    TransferFailed,
+    /// A local or remote path was empty or tried to escape its root.
+    PathRejected,
     /// An I/O operation failed.
     Io,
     /// An internal invariant failed.
@@ -91,6 +103,12 @@ impl ErrorCode {
             Self::IdentityRejected => "identity_rejected",
             Self::ProtocolError => "protocol_error",
             Self::ExecFailed => "exec_failed",
+            Self::RemoteNotFound => "remote_not_found",
+            Self::PermissionDenied => "permission_denied",
+            Self::DiskFull => "disk_full",
+            Self::ConnectionLost => "connection_lost",
+            Self::TransferFailed => "transfer_failed",
+            Self::PathRejected => "path_rejected",
             Self::Io => "io_error",
             Self::Internal => "internal_error",
         }

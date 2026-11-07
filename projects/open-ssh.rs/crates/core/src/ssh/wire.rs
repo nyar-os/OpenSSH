@@ -41,6 +41,12 @@ impl Writer {
         self
     }
 
+    /// Append a `uint64`.
+    pub fn u64(&mut self, value: u64) -> &mut Self {
+        self.buf.extend_from_slice(&value.to_be_bytes());
+        self
+    }
+
     /// Append raw bytes that are already encoded.
     pub fn raw(&mut self, value: &[u8]) -> &mut Self {
         self.buf.extend_from_slice(value);
@@ -113,6 +119,12 @@ impl<'a> Reader<'a> {
     pub fn u32(&mut self) -> Result<u32> {
         let bytes = self.take(4)?;
         Ok(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    }
+
+    /// Read a `uint64`.
+    pub fn u64(&mut self) -> Result<u64> {
+        let bytes = self.take(8)?;
+        Ok(u64::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]]))
     }
 
     /// Read a length-prefixed byte string.

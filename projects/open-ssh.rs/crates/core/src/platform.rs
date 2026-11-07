@@ -98,6 +98,7 @@ type TransportSpec = (&'static str, Option<CapabilityState>, &'static str);
 
 const SUPPORTS: Option<CapabilityState> = None;
 const NO_EXEC: Option<CapabilityState> = Some(CapabilityState::NotImplemented);
+const NO_TRANSFER: Option<CapabilityState> = Some(CapabilityState::NotImplemented);
 const NO_PORT_FORWARD: Option<CapabilityState> = Some(CapabilityState::NotImplemented);
 const NO_KEYS: Option<CapabilityState> = Some(CapabilityState::NotImplemented);
 const NO_KNOWN_HOSTS: Option<CapabilityState> = Some(CapabilityState::NotImplemented);
@@ -107,7 +108,10 @@ const EXEC_TRANSPORTS: &[TransportSpec] = &[
     ("ssh", SUPPORTS, "Supported in-process with a pinned host key."),
     ("rdp", NO_EXEC, "RDP has no command channel. The protocol carries graphics, input, clipboard, and redirection channels only."),
 ];
-const TRANSFER_TRANSPORTS: &[TransportSpec] = &[("ssh", SUPPORTS, "SFTP"), ("rdp", SUPPORTS, "drive redirection")];
+const TRANSFER_TRANSPORTS: &[TransportSpec] = &[
+    ("ssh", SUPPORTS, "Supported in-process over SFTP with a pinned host key."),
+    ("rdp", NO_TRANSFER, "RDP transfer uses drive redirection, which this round does not implement."),
+];
 const SESSION_TRANSPORTS: &[TransportSpec] = &[("ssh", SUPPORTS, "planned"), ("rdp", SUPPORTS, "planned")];
 const HOST_TRANSPORTS: &[TransportSpec] = &[("ssh", SUPPORTS, "planned"), ("rdp", SUPPORTS, "planned")];
 const PORT_FORWARD_TRANSPORTS: &[TransportSpec] =
@@ -148,9 +152,9 @@ const DOMAIN: &[DomainRow] = &[
     },
     DomainRow {
         id: capability_ids::TRANSFER,
-        state: Some(CapabilityState::NotImplemented),
-        reason: SKELETON_REASON,
-        detail: "Upload, download, and synchronize files with a dry-run plan.",
+        state: None,
+        reason: "Available over the ssh transport. The rdp transport needs drive redirection.",
+        detail: "Upload, download, and list files with resumable progress and a dry-run plan.",
         transports: TRANSFER_TRANSPORTS,
     },
     DomainRow {
@@ -223,8 +227,8 @@ pub const fn platform() -> PlatformInfo {
     PlatformInfo { os: std::env::consts::OS, arch: std::env::consts::ARCH }
 }
 
-/// Build the capability report. `exec` is available over `ssh`. Every other
-/// domain row stays unavailable in this round.
+/// Build the capability report. `exec` and `transfer` are available over
+/// `ssh`. Every other domain row stays unavailable in this round.
 pub fn capabilities() -> CapabilitiesReport {
     let mut items = Vec::with_capacity(DOMAIN.len() + META.len());
     for (id, detail) in META {
@@ -252,11 +256,11 @@ pub fn capabilities() -> CapabilitiesReport {
         transports: TRANSPORTS.to_vec(),
         items,
         notes: vec![
-            "`exec` is available over `ssh` only. Every other domain capability stays not_implemented in this round.",
+            "`exec` and `transfer` are available over `ssh`. Every other domain capability stays not_implemented in this round.",
             "Capability, version, audit, and GUI meta capabilities are available.",
             "Capability ids describe a goal. Transport support is reported per row and never encoded in the id.",
-            "RDP supports connect, session, and transfer only. It has no command channel, so `exec` is not_implemented for rdp.",
-            "`exec` requires an explicit host key pin. An unknown or mismatched host key fails instead of being trusted.",
+            "RDP supports connect and session. It has no command channel, so `exec` is not_implemented, and its transfer path needs drive redirection.",
+            "`exec` and `transfer` require an explicit host key pin. An unknown or mismatched host key fails instead of being trusted.",
             "No capability may fall back to an external ssh, sftp, scp, mstsc, or winrs process.",
         ],
     }
