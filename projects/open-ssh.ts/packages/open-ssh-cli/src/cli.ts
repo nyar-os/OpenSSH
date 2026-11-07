@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 import { createCli, type CommandContext, type ParsedOptions } from '@wae/commander';
 
-import { AppError, fromNativeError, invokeCapability, capabilities, configureAudit, auditQuery, runGui, version, type CapabilityItem, type Transport } from '@wae/open-ssh';
+import { AppError, fromNativeError, invokeCapability, exec, capabilities, configureAudit, auditQuery, runGui, version, type CapabilityItem, type ExecPreview, type ExecResult, type Transport } from '@wae/open-ssh';
 
 import { loadRuntimeContract, type ActorChannel } from './runtime.js';
 
@@ -51,6 +51,14 @@ function integerOption(options: ParsedOptions, key: string): number | undefined 
     const value = Number(raw);
     if (!Number.isInteger(value) || value < 0) {
         throw new AppError({ code: 'invalid_argument', message: `\`--${key}\` must be a non-negative integer` });
+    }
+    return value;
+}
+
+function requiredOption(options: ParsedOptions, key: string): string {
+    const value = stringOption(options, key);
+    if (value === undefined) {
+        throw new AppError({ code: 'invalid_argument', message: `\`--${key}\` is required` });
     }
     return value;
 }
@@ -239,9 +247,99 @@ cli.command('gui', 'cli.cmd.gui')
         }
     });
 
+/**
+ * Resolve `--identity` and `--password-env` into exactly one auth path.
+ *
+ * The password is read from the environment so it never appears in the process
+ * command line, in audit params, or in shell history.
+ */
+function credentials(options: ParsedOptions): { identityPath?: string; password?: string } {
+    const identityPath = stringOption(options, 'identity');
+    const envName = stringOption(options, 'password-env');
+    if ((identityPath === undefined) === (envName === undefined)) {
+        throw new AppError({
+            code: 'invalid_argument',
+            message: 'pass exactly one of `--identity` or `--password-env`',
+        });
+    }
+    if (envName === undefined) return { identityPath };
+    const password = process.env[envName];
+    if (password === undefined || password === '') {
+        throw new AppError({ code: 'invalid_argument', message: `\`--password-env ${envName}\` is not set` });
+    }
+    return { password };
+}
+
+function formatPreview(preview: ExecPreview, host: string): string {
+    return [
+        'dry-run: no connection opened, no command run',
+        `transport\t${preview.transport}`,
+        `target\t${preview.user}@${host}:${preview.port}`,
+        `auth\t${preview.authMethod}`,
+        `host-key\t${preview.hostKeySha256}`,
+        `command\t${preview.commandBytes} bytes`,
+        `timeout\t${preview.timeoutMs} ms`,
+    ].join('\n');
+}
+
+/** Write captured output as-is, then the summary on stderr. */
+function writeExecResult(result: ExecResult, host: string, ctx: CommandContext): void {
+    process.stdout.write(result.stdout);
+    process.stderr.write(result.stderr);
+    ctx.stderr(
+        `exec: exit ${result.exitCode ?? 'unknown'} · ${result.stdoutBytes} stdout bytes · ${result.stderrBytes} stderr bytes · ` +
+            `${result.durationMs} ms · ${result.user}@${host}:${result.port} over ${result.transport}`,
+    );
+}
+
+cli.command('exec', 'cli.cmd.exec')
+    .option('--transport <transport>', 'cli.opt.transport', { enum: ['ssh', 'rdp'] })
+    .option('--host <host>', 'cli.opt.host')
+    .option('--port <n>', 'cli.opt.port')
+    .option('--user <user>', 'cli.opt.user')
+    .option('--command <text>', 'cli.opt.command')
+    .option('--identity <path>', 'cli.opt.identity')
+    .option('--password-env <name>', 'cli.opt.password-env')
+    .option('--host-key-sha256 <pin>', 'cli.opt.host-key-sha256')
+    .option('--timeout-ms <n>', 'cli.opt.timeout-ms')
+    .option('--dry-run', 'cli.opt.dry-run')
+    .actionCtx(async (options, _args, ctx) => {
+        try {
+            bootstrap(options);
+            const host = requiredOption(options, 'host');
+            const request = {
+                transport: transportOption(options, true),
+                host,
+                port: integerOption(options, 'port') ?? 22,
+                user: requiredOption(options, 'user'),
+                command: requiredOption(options, 'command'),
+                ...credentials(options),
+                hostKeySha256: stringOption(options, 'host-key-sha256'),
+                timeoutMs: integerOption(options, 'timeout-ms'),
+            };
+            if (flag(options, 'dry-run')) {
+                const preview = exec({ ...request, dryRun: true });
+                emit(options, ctx, preview, formatPreview(preview, host));
+                return EXIT.OK;
+            }
+            const result = exec(request);
+            if (flag(options, 'json')) {
+                emit(options, ctx, result, '');
+            }
+            else {
+                writeExecResult(result, host, ctx);
+            }
+            // The remote status decides success, and the exact value stays in
+            // `exitCode`. No exit status means the call cannot be called a success.
+            return result.exitCode === 0 ? EXIT.OK : EXIT.FAILURE;
+        }
+        catch (error) {
+            return fail(options, ctx, error);
+        }
+    });
+
 for (const [id, requiredTransport, mutating] of [
     ['connect', true, false],
-    ['exec', true, false],
     ['transfer', true, true],
     ['session', true, false],
     ['host-inventory', false, false],

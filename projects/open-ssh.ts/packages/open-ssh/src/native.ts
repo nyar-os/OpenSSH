@@ -11,10 +11,25 @@ import { AppError } from './errors.js';
 const require = createRequire(import.meta.url);
 const PLATFORM_PACKAGE = '@wae/open-ssh-win32-x64';
 
+/** Options accepted by the native `exec` export. */
+export interface NativeExecOptions {
+    transport?: string;
+    host: string;
+    port?: number;
+    user: string;
+    command: string;
+    password?: string;
+    identityPath?: string;
+    hostKeySha256?: string;
+    timeoutMs?: number;
+    dryRun?: boolean;
+}
+
 /** Raw surface exported by the Rust `napi` crate. */
 export interface NativeBindings {
     version(): string;
     capabilities(): unknown;
+    exec(options: NativeExecOptions): unknown;
     invoke(capability: string, transport?: string): unknown;
     cliContract(): unknown;
     openGui(options?: { contentDir?: string; title?: string }): unknown;
