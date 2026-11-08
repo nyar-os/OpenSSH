@@ -333,7 +333,16 @@ pub fn normalize_local_path(raw: &Path) -> Result<PathBuf> {
 fn upload(client: &mut SftpClient<'_>, plan: &Plan, resume: bool, progress: &mut impl FnMut(Progress)) -> Result<Outcome> {
     let mut local = File::open(&plan.local_path).map_err(|error| local_error(&plan.local_path, error))?;
     let total = local.metadata().map_err(|error| local_error(&plan.local_path, error))?.len();
-    let start = if resume { client.size(&plan.remote_path)?.unwrap_or(0).min(total) } else { 0 };
+    let start = if resume { client.size(&plan.remote_path)?.unwrap_or(0) } else { 0 };
+    if start > total {
+        return Err(Error::new(
+            ErrorCode::TransferFailed,
+            format!(
+                "the remote file `{}` is {start} bytes but the local source is only {total} bytes, so it cannot be resumed",
+                plan.remote_path
+            ),
+        ));
+    }
 
     let handle = client.create(&plan.remote_path, start > 0)?;
     if start > 0 {
