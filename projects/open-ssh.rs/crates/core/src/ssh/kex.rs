@@ -29,10 +29,10 @@ const MSG_EXT_INFO: u8 = 7;
 
 /// Admitted algorithm names. Every list has exactly one entry so negotiation
 /// is a presence check instead of a preference guess.
-const KEX_ALGORITHM: &str = "curve25519-sha256";
-const HOST_KEY_ALGORITHM: &str = "ssh-ed25519";
-const CIPHER: &str = "aes256-gcm@openssh.com";
-const MAC: &str = "hmac-sha2-256";
+pub(crate) const KEX_ALGORITHM: &str = "curve25519-sha256";
+pub(crate) const HOST_KEY_ALGORITHM: &str = "ssh-ed25519";
+pub(crate) const CIPHER: &str = "aes256-gcm@openssh.com";
+pub(crate) const MAC: &str = "hmac-sha2-256";
 const COMPRESSION: &str = "none";
 
 /// Result of a completed first key exchange.

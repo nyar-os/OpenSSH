@@ -5,9 +5,10 @@
 //! capabilities arrive as structured upstream errors. Audit is wrapped at every
 //! capability boundary through the shared `wae.audit/v0` facility.
 //!
-//! The `exec` capability runs one command over an in-process SSH client. Every
-//! other domain capability is still registered as `not_implemented` with a
-//! stable code instead of fabricating a result.
+//! The `connect`, `exec`, and `transfer` capabilities run in-process. `connect`
+//! verifies the target and the credentials and then disconnects. Every other
+//! domain capability is still registered as `not_implemented` with a stable code
+//! instead of fabricating a result.
 
 #![deny(missing_docs)]
 
@@ -17,7 +18,9 @@ use open_ssh_core::{
     CapabilityState, Error as CoreError, ErrorCode,
     audit::capability_ids,
     platform::{CapabilityItem, capabilities as core_capabilities, platform as core_platform},
-    ssh::{self, ExecAuth, ExecRequest, ExecResult, Progress, TransferDirection, TransferRequest, TransferResult},
+    ssh::{
+        self, ConnectRequest, ConnectResult, ExecAuth, ExecRequest, ExecResult, Progress, TransferDirection, TransferRequest, TransferResult,
+    },
 };
 use serde_json::{Value, json};
 use wae::{
@@ -343,6 +346,64 @@ fn endpoint(obj: JsValue) -> Result<Endpoint> {
     Ok(Endpoint { port, timeout: Duration::from_millis(timeout_ms), auth })
 }
 
+fn connect_request(arg: JsValue) -> Result<ConnectRequest> {
+    let transport = optional_string_prop(arg, "transport")?.unwrap_or_else(|| "ssh".to_string());
+    let host = required_string(arg, "host")?;
+    let user = required_string(arg, "user")?;
+    let host_key_sha256 = optional_string_prop(arg, "hostKeySha256")?.unwrap_or_default();
+    let Endpoint { port, timeout, auth } = endpoint(arg)?;
+    Ok(ConnectRequest { transport, host, port, user, auth, host_key_sha256, timeout })
+}
+
+/// Connect, verify the pinned host key, authenticate, and disconnect.
+///
+/// Audit params carry the target and the auth method but never the password or
+/// the identity file contents. The result adds the server version, the
+/// negotiated algorithm set, and the wall-clock duration.
+#[function]
+fn connect(ctx: CallContext) -> Result<JsValue> {
+    let arg = object_arg(&ctx)?.ok_or_else(|| usage("connect requires an options object"))?;
+    let request = connect_request(arg)?;
+    let dry_run = optional_bool_prop(arg, "dryRun")?.unwrap_or(false);
+    let params = json!({
+        "transport": &request.transport,
+        "hostHash": ssh::host_hash(&request.host),
+        "port": request.port,
+        "user": &request.user,
+        "authMethod": request.auth.name(),
+        "hostKeySha256": &request.host_key_sha256,
+    });
+
+    if dry_run {
+        let result = audit::run(capability_ids::CONNECT, Mode::DryRun, params, || {
+            let preview = ssh::connect_preview(&request)?;
+            Ok((preview, Summary::new(1, format!("ssh connect preview for host {}", ssh::host_hash(&request.host)))))
+        });
+        return match result {
+            Ok(preview) => value_to_js(&ctx, &preview),
+            Err(error) => Err(core_error(error)),
+        };
+    }
+
+    let summary_host = ssh::host_hash(&request.host);
+    let port = request.port;
+    let user = request.user.clone();
+    let result = audit::run_metered(capability_ids::CONNECT, Mode::Execute, params, move || {
+        let outcome: ConnectResult = ssh::connect(request)?;
+        let extra = json!({
+            "serverVersion": outcome.server_version,
+            "cipher": outcome.cipher,
+            "durationMs": outcome.duration_ms,
+        });
+        let summary = format!("ssh connect on host {summary_host}:{port} as {user}");
+        Ok((outcome, extra, Summary::new(1, summary)))
+    });
+    match result {
+        Ok(outcome) => value_to_js(&ctx, &outcome),
+        Err(error) => Err(core_error(error)),
+    }
+}
+
 fn exec_request(arg: JsValue) -> Result<ExecRequest> {
     let transport = optional_string_prop(arg, "transport")?.unwrap_or_else(|| "ssh".to_string());
     let host = required_string(arg, "host")?;
@@ -607,6 +668,7 @@ fn audit_query(ctx: CallContext) -> Result<JsValue> {
 register_module![
     version,
     capabilities,
+    connect,
     exec,
     transfer,
     invoke,
@@ -645,6 +707,7 @@ mod tests {
         assert!(gui.is_available());
         assert!(gui.transports.is_empty());
         assert!(report.notes.iter().any(|note| note.contains("dependency_blocked")));
+        assert!(report.get(capability_ids::CONNECT).expect("connect row").is_available());
         assert!(report.get(capability_ids::EXEC).expect("exec row").is_available());
         assert!(report.get(capability_ids::TRANSFER).expect("transfer row").is_available());
         for id in [capability_ids::HOST_INSTALL, capability_ids::HOST_UNINSTALL, capability_ids::PORT_FORWARD] {
@@ -657,7 +720,7 @@ mod tests {
 
     #[test]
     fn invoke_refuses_every_unavailable_domain_capability_with_its_stable_code() {
-        for id in [capability_ids::CONNECT, capability_ids::SESSION, capability_ids::HOST_INVENTORY] {
+        for id in [capability_ids::SESSION, capability_ids::HOST_INVENTORY] {
             let error = invoke_error(id, None);
             assert_eq!(error.code(), ErrorCode::NotImplemented);
             assert_eq!(error.capability(), Some(id));
@@ -666,7 +729,7 @@ mod tests {
 
     #[test]
     fn invoke_points_available_capabilities_at_their_export() {
-        for id in [capability_ids::EXEC, capability_ids::TRANSFER] {
+        for id in [capability_ids::CONNECT, capability_ids::EXEC, capability_ids::TRANSFER] {
             let error = invoke_error(id, None);
             assert_eq!(error.code(), ErrorCode::InvalidArgument);
             assert!(error.message().contains("dedicated export"), "`{id}` must point at its dedicated export");

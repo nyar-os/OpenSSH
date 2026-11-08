@@ -20,8 +20,7 @@ const DOMAIN: [&str; 11] = [
 
 const META: [&str; 4] = [capability_ids::CAPABILITIES, capability_ids::VERSION, capability_ids::AUDIT_QUERY, capability_ids::AUDIT_CONFIGURE];
 
-const UNAVAILABLE_DOMAIN: [&str; 9] = [
-    capability_ids::CONNECT,
+const UNAVAILABLE_DOMAIN: [&str; 8] = [
     capability_ids::SESSION,
     capability_ids::HOST_INVENTORY,
     capability_ids::PORT_FORWARD,
@@ -33,9 +32,9 @@ const UNAVAILABLE_DOMAIN: [&str; 9] = [
 ];
 
 #[test]
-fn exec_and_transfer_are_available_and_every_other_domain_capability_stays_not_implemented() {
+fn connect_exec_and_transfer_are_available_and_every_other_domain_capability_stays_not_implemented() {
     let report = capabilities();
-    for id in [capability_ids::EXEC, capability_ids::TRANSFER] {
+    for id in [capability_ids::CONNECT, capability_ids::EXEC, capability_ids::TRANSFER] {
         let item = report.get(id).unwrap_or_else(|| panic!("missing capability row: {id}"));
         assert_eq!(item.state, None, "{id} must be available");
         assert_eq!(item.code, None, "an available capability carries no state code");
@@ -90,15 +89,26 @@ fn rdp_reports_no_exec_and_ssh_does() {
 }
 
 #[test]
-fn connect_and_session_are_supported_by_both_transports() {
+fn session_is_supported_by_both_transports() {
     let report = capabilities();
-    for id in [capability_ids::CONNECT, capability_ids::SESSION] {
-        let item = report.get(id).unwrap_or_else(|| panic!("missing capability row: {id}"));
-        for transport in TRANSPORTS {
-            let row = item.transport(transport).unwrap_or_else(|| panic!("{id} is missing `{transport}`"));
-            assert!(row.supports(), "{id} must be supported over `{transport}`");
-        }
+    let session = report.get(capability_ids::SESSION).expect("session row");
+    for transport in TRANSPORTS {
+        let row = session.transport(transport).unwrap_or_else(|| panic!("session is missing `{transport}`"));
+        assert!(row.supports(), "session must be supported over `{transport}`");
     }
+}
+
+#[test]
+fn connect_supports_ssh_and_refuses_rdp_negotiation() {
+    let report = capabilities();
+    let connect = report.get(capability_ids::CONNECT).expect("connect row");
+    let ssh = connect.transport("ssh").expect("ssh connect row");
+    assert!(ssh.supports(), "ssh must support connect");
+    let rdp = connect.transport("rdp").expect("rdp connect row");
+    assert!(!rdp.supports(), "rdp negotiation is not implemented");
+    assert_eq!(rdp.state, Some(CapabilityState::NotImplemented));
+    assert_eq!(rdp.code, Some("not_implemented"));
+    assert!(rdp.reason.contains("RDP negotiation"), "rdp must explain the missing negotiation");
 }
 
 #[test]

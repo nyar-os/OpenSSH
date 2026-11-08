@@ -9,7 +9,13 @@
 
 Exit codes: `0` success, `1` failure, `2` usage, `3` capability unavailable, `4` canceled.
 
-`exec` and `transfer` are the available domain capabilities.
+`connect`, `exec`, and `transfer` are the available domain capabilities.
+
+`connect` opens the transport, verifies the pinned host key, authenticates, and
+disconnects at the protocol level. It reports the server identification, the
+verified fingerprint, the negotiated key exchange, host key algorithm, cipher,
+and MAC, then the wall-clock duration. It is a probe, not a shell. `connect` over
+`rdp` is refused because RDP negotiation is not implemented.
 
 `exec` runs one command over `ssh`, writes the captured stdout and stderr
 unchanged, and prints a summary on stderr. The remote exit status is reported as
@@ -28,7 +34,11 @@ Listings return sorted `entries`. Failures stay distinct: `remote_not_found`,
 with `not_implemented`.
 
 ```sh
-OPEN_SSH_PASSWORD=... open-ssh exec --transport ssh --host 10.0.0.5 --user deploy \
+OPEN_SSH_PASSWORD=... open-ssh connect --transport ssh --host 10.0.0.5 --user deploy \
+  --password-env OPEN_SSH_PASSWORD \
+  --host-key-sha256 SHA256:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx --json
+
+open-ssh exec --transport ssh --host 10.0.0.5 --user deploy \
   --command "uname -a" --password-env OPEN_SSH_PASSWORD \
   --host-key-sha256 SHA256:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 

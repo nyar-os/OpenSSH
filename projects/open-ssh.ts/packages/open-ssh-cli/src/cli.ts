@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 import { createCli, type CommandContext, type ParsedOptions } from '@wae/commander';
 
-import { AppError, fromNativeError, invokeCapability, exec, transfer as transferFiles, capabilities, configureAudit, auditQuery, runGui, version, type CapabilityItem, type ExecPreview, type ExecResult, type TransferDirection, type TransferPreview, type TransferResult, type Transport } from '@wae/open-ssh';
+import { AppError, fromNativeError, invokeCapability, connect, exec, transfer as transferFiles, capabilities, configureAudit, auditQuery, runGui, version, type CapabilityItem, type ConnectPreview, type ConnectResult, type ExecPreview, type ExecResult, type TransferDirection, type TransferPreview, type TransferResult, type Transport } from '@wae/open-ssh';
 
 import { loadRuntimeContract, type ActorChannel } from './runtime.js';
 
@@ -271,6 +271,32 @@ function credentials(options: ParsedOptions): { identityPath?: string; password?
     return { password };
 }
 
+function formatConnectPreview(preview: ConnectPreview, host: string): string {
+    return [
+        'dry-run: no connection opened',
+        `transport\t${preview.transport}`,
+        `target\t${preview.user}@${host}:${preview.port}`,
+        `auth\t${preview.authMethod}`,
+        `host-key\t${preview.hostKeySha256}`,
+        `timeout\t${preview.timeoutMs} ms`,
+    ].join('\n');
+}
+
+/** Write the negotiated session summary for a successful `connect`. */
+function writeConnectResult(result: ConnectResult, host: string, ctx: CommandContext): void {
+    ctx.stdout([
+        `server\t${result.serverVersion}`,
+        `host-key\t${result.hostKeySha256}`,
+        `kex\t${result.kexAlgorithm}`,
+        `host-key-algorithm\t${result.hostKeyAlgorithm}`,
+        `cipher\t${result.cipher}`,
+        `mac\t${result.mac}`,
+    ].join('\n'));
+    ctx.stderr(
+        `connect: ${result.authMethod} · ${result.durationMs} ms · ${result.user}@${host}:${result.port} over ${result.transport}`,
+    );
+}
+
 function formatPreview(preview: ExecPreview, host: string): string {
     return [
         'dry-run: no connection opened, no command run',
@@ -329,6 +355,48 @@ function directionOption(options: ParsedOptions): TransferDirection {
     }
     return raw;
 }
+
+cli.command('connect', 'cli.cmd.connect')
+    .option('--transport <transport>', 'cli.opt.transport', { enum: ['ssh', 'rdp'] })
+    .option('--host <host>', 'cli.opt.host')
+    .option('--port <n>', 'cli.opt.port')
+    .option('--user <user>', 'cli.opt.user')
+    .option('--identity <path>', 'cli.opt.identity')
+    .option('--password-env <name>', 'cli.opt.password-env')
+    .option('--host-key-sha256 <pin>', 'cli.opt.host-key-sha256')
+    .option('--timeout-ms <n>', 'cli.opt.timeout-ms')
+    .option('--dry-run', 'cli.opt.dry-run')
+    .actionCtx(async (options, _args, ctx) => {
+        try {
+            bootstrap(options);
+            const host = requiredOption(options, 'host');
+            const request = {
+                transport: transportOption(options, true),
+                host,
+                port: integerOption(options, 'port') ?? 22,
+                user: requiredOption(options, 'user'),
+                ...credentials(options),
+                hostKeySha256: stringOption(options, 'host-key-sha256'),
+                timeoutMs: integerOption(options, 'timeout-ms'),
+            };
+            if (flag(options, 'dry-run')) {
+                const preview = connect({ ...request, dryRun: true });
+                emit(options, ctx, preview, formatConnectPreview(preview, host));
+                return EXIT.OK;
+            }
+            const result = connect(request);
+            if (flag(options, 'json')) {
+                emit(options, ctx, result, '');
+            }
+            else {
+                writeConnectResult(result, host, ctx);
+            }
+            return EXIT.OK;
+        }
+        catch (error) {
+            return fail(options, ctx, error);
+        }
+    });
 
 cli.command('exec', 'cli.cmd.exec')
     .option('--transport <transport>', 'cli.opt.transport', { enum: ['ssh', 'rdp'] })
@@ -429,7 +497,6 @@ cli.command('transfer', 'cli.cmd.transfer')
     });
 
 for (const [id, requiredTransport, mutating] of [
-    ['connect', true, false],
     ['session', true, false],
     ['host-inventory', false, false],
     ['port-forward', false, false],

@@ -68,6 +68,8 @@ pub(crate) enum FixtureMode {
     Exec,
     /// The `sftp` subsystem over an in-memory file system.
     Sftp,
+    /// Authenticate and then expect a client disconnect.
+    Probe,
 }
 
 /// One loopback server configuration.
@@ -177,6 +179,9 @@ fn serve(stream: TcpStream, host_key: &SigningKey, options: &FixtureOptions, ind
     handshake(&mut transport, host_key)?;
     service_request(&mut transport)?;
     authenticate(&mut transport, &options.auth, &options.client_key)?;
+    if options.mode == FixtureMode::Probe {
+        return expect_disconnect(&mut transport);
+    }
     let (client_channel, request) = open_channel(&mut transport)?;
     match (options.mode, request) {
         (FixtureMode::Exec, ChannelRequest::Exec) => run_exec(&mut transport, client_channel),
@@ -185,6 +190,19 @@ fn serve(stream: TcpStream, host_key: &SigningKey, options: &FixtureOptions, ind
         }
         _ => Err(protocol("the fixture serves only the configured service")),
     }
+}
+
+/// Require the client to end the session with a disconnect instead of a bare FIN.
+fn expect_disconnect(transport: &mut Transport) -> Result<()> {
+    let message = transport.receive()?;
+    let mut reader = Reader::new(&message);
+    if reader.byte()? != 1 {
+        return Err(protocol("the probe did not send `SSH_MSG_DISCONNECT`"));
+    }
+    if reader.u32()? != 11 {
+        return Err(protocol("the probe did not disconnect by application"));
+    }
+    Ok(())
 }
 
 fn host_key_blob(key: &SigningKey) -> Vec<u8> {

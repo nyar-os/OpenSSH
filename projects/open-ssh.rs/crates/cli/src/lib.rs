@@ -261,7 +261,7 @@ mod tests {
             assert!(!ids.contains(&row.id), "duplicate command id: {}", row.id);
             ids.push(row.id);
             match (row.kind, row.capability) {
-                ("domain", capability_ids::EXEC | capability_ids::TRANSFER) => {
+                ("domain", capability_ids::CONNECT | capability_ids::EXEC | capability_ids::TRANSFER) => {
                     assert_eq!(row.state, None, "`{}` must be exposed as available", row.id);
                     assert_eq!(row.code, None);
                 }
