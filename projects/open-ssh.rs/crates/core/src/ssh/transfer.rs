@@ -239,7 +239,15 @@ fn plan(request: &TransferRequest) -> Result<Plan> {
             let raw = request.local_path.as_ref().ok_or_else(|| Error::new(ErrorCode::PathRejected, "this direction requires a local path"))?;
             normalize_local_path(raw)?
         }
-        TransferDirection::List => PathBuf::new(),
+        TransferDirection::List => {
+            if request.resume {
+                return Err(Error::new(ErrorCode::InvalidArgument, "`list` moves no bytes, so `resume` does not apply"));
+            }
+            if request.local_path.is_some() {
+                return Err(Error::new(ErrorCode::InvalidArgument, "`list` has no local file, so `local_path` does not apply"));
+            }
+            PathBuf::new()
+        }
     };
     Ok(Plan { remote_path, local_path })
 }

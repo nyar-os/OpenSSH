@@ -585,6 +585,30 @@ mod tests {
     }
 
     #[test]
+    fn a_listing_rejects_options_it_cannot_honour() {
+        let request = |resume: bool, local_path: Option<PathBuf>| TransferRequest {
+            transport: "ssh".to_string(),
+            host: "example.invalid".to_string(),
+            port: 22,
+            user: "operator".to_string(),
+            auth: ExecAuth::Password("secret".to_string()),
+            host_key_sha256: "SHA256:abc".to_string(),
+            timeout: std::time::Duration::from_secs(1),
+            direction: TransferDirection::List,
+            local_path,
+            remote_path: "/incoming".to_string(),
+            resume,
+        };
+
+        assert_eq!(transfer(request(true, None)).expect_err("resume does not apply to a listing").code(), ErrorCode::InvalidArgument);
+        assert_eq!(
+            transfer(request(false, Some(temp_path("list.bin")))).expect_err("a listing has no local file").code(),
+            ErrorCode::InvalidArgument
+        );
+        assert_eq!(transfer_preview(&request(true, None)).expect_err("a preview rejects the same request").code(), ErrorCode::InvalidArgument);
+    }
+
+    #[test]
     fn missing_remote_files_report_remote_not_found() {
         let fixture = sftp_fixture(fixture::FixtureOptions::default());
         let local = temp_path("missing.bin");
