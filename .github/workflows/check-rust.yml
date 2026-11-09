@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       # Reads rust-toolchain.toml so CI cannot drift from the pinned channel.
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
       # No Linux system-library step: the shared WAE Linux backend loads
       # WebKitGTK 4.1 at runtime through libloading, so it has no build-time
       # pkg-config dependency in this skeleton.
