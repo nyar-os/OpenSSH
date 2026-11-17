@@ -27,3 +27,77 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: cargo test
         run: cargo test --workspace
+
+  # The loopback fixture speaks the same encoding as the client, so it cannot
+  # catch a symmetric protocol mistake. This job talks to a stock `sshd`
+  # instead, which is the only evidence that the wire format is right.
+  interop-sshd:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_JOBS: "4"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Start a local sshd on 127.0.0.1:2222
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/sshd"
+          mkdir -p "$work"
+          ssh-keygen -q -t ed25519 -N "" -f "$work/host_ed25519_key"
+          ssh-keygen -q -t ed25519 -N "" -f "$work/client_ed25519_key"
+          chmod 600 "$work/host_ed25519_key" "$work/client_ed25519_key"
+          cp "$work/client_ed25519_key.pub" "$work/authorized_keys"
+          chmod 600 "$work/authorized_keys"
+          cat > "$work/sshd_config" <<EOF
+          Port 2222
+          ListenAddress 127.0.0.1
+          HostKey $work/host_ed25519_key
+          PidFile $work/sshd.pid
+          AuthorizedKeysFile $work/authorized_keys
+          PasswordAuthentication no
+          PubkeyAuthentication yes
+          UsePAM no
+          StrictModes no
+          LogLevel VERBOSE
+          Subsystem sftp internal-sftp
+          EOF
+          sudo mkdir -p /run/sshd
+          # The runner account has a locked password, and `sshd` refuses a
+          # locked account before it looks at authorised keys. Give it a real
+          # password so the account is unlocked, while password authentication
+          # stays disabled above.
+          echo "$(id -un):interop-only" | sudo chpasswd
+          sudo /usr/sbin/sshd -f "$work/sshd_config" -E "$work/sshd.log"
+          for attempt in $(seq 1 30); do
+            if (echo > /dev/tcp/127.0.0.1/2222) 2>/dev/null; then
+              echo "sshd listens on 127.0.0.1:2222"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "sshd did not start, and here is the log"
+          sudo cat "$work/sshd.log" || true
+          exit 1
+      - name: Run the real sshd interop tests
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/sshd"
+          pin="$(ssh-keygen -lf "$work/host_ed25519_key" -E sha256 | awk '{print $2}')"
+          echo "pinned host key fingerprint: $pin"
+          export OPEN_SSH_INTEROP_HOST=127.0.0.1
+          export OPEN_SSH_INTEROP_PORT=2222
+          export OPEN_SSH_INTEROP_USER="$(id -un)"
+          export OPEN_SSH_INTEROP_KEY="$work/client_ed25519_key"
+          export OPEN_SSH_INTEROP_PIN="$pin"
+          export OPEN_SSH_INTEROP_REQUIRED=1
+          cargo test -p open-ssh-core --test interop_sshd -- --nocapture --test-threads=1
+      - name: Show the sshd log
+        if: failure()
+        run: |
+          log="$RUNNER_TEMP/sshd/sshd.log"
+          if sudo test -f "$log"; then
+            echo "--- $log"
+            sudo cat "$log"
+          else
+            echo "no sshd log at $log"
+          fi
