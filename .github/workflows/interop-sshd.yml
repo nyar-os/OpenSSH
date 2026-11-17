@@ -38,6 +38,11 @@ jobs:
           Subsystem sftp internal-sftp
           EOF
           sudo mkdir -p /run/sshd
+          # The runner account has a locked password, and `sshd` refuses a
+          # locked account before it looks at authorised keys. Give it a real
+          # password so the account is unlocked, while password authentication
+          # stays disabled below.
+          echo "$(id -un):interop-only" | sudo chpasswd
           sudo /usr/sbin/sshd -f "$work/sshd_config" -E "$work/sshd.log"
           for attempt in $(seq 1 30); do
             if (echo > /dev/tcp/127.0.0.1/2222) 2>/dev/null; then
@@ -49,13 +54,6 @@ jobs:
           echo "sshd did not start, and here is the log"
           cat "$work/sshd.log" || true
           exit 1
-      - name: Verify the local sshd with the system client
-        run: |
-          set -euo pipefail
-          work="$RUNNER_TEMP/sshd"
-          ls -l "$work" || true
-          ssh -vv -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            -i "$work/client_ed25519_key" -p 2222 "$(id -un)@127.0.0.1" true || true
       - name: Run the real sshd interop tests
         run: |
           set -euo pipefail
