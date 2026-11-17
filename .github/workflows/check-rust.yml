@@ -15,7 +15,7 @@ jobs:
     env:
       CARGO_BUILD_JOBS: "4"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # Reads rust-toolchain.toml so CI cannot drift from the pinned channel.
       - uses: actions-rust-lang/setup-rust-toolchain@v2
       # No Linux system-library step: the shared WAE Linux backend loads
@@ -36,7 +36,7 @@ jobs:
     env:
       CARGO_BUILD_JOBS: "4"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2
       - name: Start a local sshd on 127.0.0.1:2222
         run: |
