@@ -16,9 +16,12 @@
         "stage:napi": "wae native stage",
         "smoke:napi": "wae native smoke",
         "check:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
+        "publish:placeholder": "nifty publish --placeholder",
+        "trust": "nifty trust",
         "gui": "wae build && pnpm --filter @wae/open-ssh exec node ./dist/cli.js gui"
     },
     "devDependencies": {
+        "@doki-land/nifty": "^0.1.10",
         "@wae/wae": "0.0.5",
         "@types/node": "^22.20.4",
         "typescript": "^5.9.2"
