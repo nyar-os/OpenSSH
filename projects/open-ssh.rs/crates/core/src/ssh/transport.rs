@@ -244,12 +244,7 @@ impl Transport {
 
     /// Send one SSH payload wrapped in the binary packet protocol.
     pub fn send(&mut self, payload: &[u8]) -> Result<()> {
-        let block = if self.outbound.is_some() { 16 } else { 8 };
-        let unpadded = 5 + payload.len();
-        let mut padding_len = block - (unpadded % block);
-        if padding_len < 4 {
-            padding_len += block;
-        }
+        let padding_len = padding_length(self.outbound.is_some(), payload.len());
         let packet_len = 1 + payload.len() + padding_len;
         let mut packet = Vec::with_capacity(packet_len);
         packet.push(padding_len as u8);
@@ -343,6 +338,22 @@ fn timeout_error(message: impl Into<String>) -> Error {
     Error::new(ErrorCode::ConnectTimeout, message)
 }
 
+/// Random padding for one packet, per RFC 4253 section 6 and RFC 5647
+/// section 7.2.
+///
+/// Plain packets align the length field together with the rest of the packet.
+/// Under AEAD only `padding_length || payload || padding` is encrypted, and
+/// the length field travels in the clear as additional authenticated data, so
+/// it must not be counted when aligning.
+fn padding_length(aead: bool, payload_len: usize) -> usize {
+    let (block, header) = if aead { (16, 1) } else { (8, 5) };
+    let mut padding = block - ((header + payload_len) % block);
+    if padding < 4 {
+        padding += block;
+    }
+    padding
+}
+
 fn map_read_error(error: std::io::Error) -> Error {
     match error.kind() {
         ErrorKind::TimedOut | ErrorKind::WouldBlock => timeout_error(format!("timed out while reading from the peer: {error}")),
@@ -355,5 +366,28 @@ fn map_write_error(error: std::io::Error) -> Error {
     match error.kind() {
         ErrorKind::TimedOut | ErrorKind::WouldBlock => timeout_error(format!("timed out while writing to the peer: {error}")),
         _ => Error::new(ErrorCode::Io, format!("write failed: {error}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::padding_length;
+
+    #[test]
+    fn plain_packets_align_the_length_field_with_the_block() {
+        for payload in 0..128 {
+            let padding = padding_length(false, payload);
+            assert!((4..256).contains(&padding), "payload {payload} produced padding {padding}");
+            assert_eq!((4 + 1 + payload + padding) % 8, 0, "payload {payload} is not a multiple of the plain block size");
+        }
+    }
+
+    #[test]
+    fn aead_packets_align_only_the_encrypted_portion() {
+        for payload in 0..128 {
+            let padding = padding_length(true, payload);
+            assert!((4..256).contains(&padding), "payload {payload} produced padding {padding}");
+            assert_eq!((1 + payload + padding) % 16, 0, "payload {payload} is not a multiple of the AEAD block size");
+        }
     }
 }
