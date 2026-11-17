@@ -21,6 +21,8 @@ const MSG_USERAUTH_BANNER: u8 = 53;
 const MSG_USERAUTH_METHOD_SPECIFIC: u8 = 60;
 
 const SERVICE: &str = "ssh-userauth";
+/// Service the client asks to start once authentication completes.
+const CONNECTION_SERVICE: &str = "ssh-connection";
 
 /// How the client proves its identity.
 pub enum AuthMethod {
@@ -58,7 +60,7 @@ pub fn authenticate(transport: &mut Transport, user: &str, method: &AuthMethod) 
     match method {
         AuthMethod::Password(password) => {
             let mut request = Writer::new(MSG_USERAUTH_REQUEST);
-            request.string(user.as_bytes()).string(SERVICE.as_bytes()).string(b"password").boolean(false);
+            request.string(user.as_bytes()).string(CONNECTION_SERVICE.as_bytes()).string(b"password").boolean(false);
             request.string(password.as_bytes());
             transport.send(&request.finish())?;
         }
@@ -66,7 +68,7 @@ pub fn authenticate(transport: &mut Transport, user: &str, method: &AuthMethod) 
             let mut request = Writer::new(MSG_USERAUTH_REQUEST);
             request
                 .string(user.as_bytes())
-                .string(SERVICE.as_bytes())
+                .string(CONNECTION_SERVICE.as_bytes())
                 .string(b"publickey")
                 .boolean(true)
                 .string(ALGORITHM.as_bytes())
