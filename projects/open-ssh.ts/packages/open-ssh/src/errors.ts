@@ -10,6 +10,8 @@ export interface ErrorPayload {
     code: string;
     capability?: string;
     platform?: string;
+    /** Native loading candidates that were tried, in order. */
+    attempts?: string[];
     message: string;
 }
 
@@ -18,6 +20,7 @@ export class AppError extends Error {
     readonly code: string;
     readonly capability?: string;
     readonly platform?: string;
+    readonly attempts?: string[];
 
     constructor(payload: ErrorPayload) {
         super(payload.message);
@@ -25,6 +28,7 @@ export class AppError extends Error {
         this.code = payload.code;
         this.capability = payload.capability;
         this.platform = payload.platform;
+        this.attempts = payload.attempts;
     }
 
     /** Machine-readable form. */
@@ -33,6 +37,7 @@ export class AppError extends Error {
             code: this.code,
             ...(this.capability ? { capability: this.capability } : {}),
             ...(this.platform ? { platform: this.platform } : {}),
+            ...(this.attempts ? { attempts: this.attempts } : {}),
             message: this.message,
         };
     }

@@ -526,15 +526,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "open-ssh-cli"
-version = "0.0.0"
-dependencies = [
- "open-ssh-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "open-ssh-core"
 version = "0.0.0"
 dependencies = [
@@ -552,7 +543,6 @@ dependencies = [
 name = "open-ssh-napi"
 version = "0.0.0"
 dependencies = [
- "open-ssh-cli",
  "open-ssh-core",
  "serde",
  "serde_json",

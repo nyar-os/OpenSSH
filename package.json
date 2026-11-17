@@ -11,12 +11,12 @@
     "scripts": {
         "build": "wae build",
         "build:napi": "wae native build",
-        "build:ts": "pnpm --filter @wae/open-ssh --filter @wae/open-ssh-cli run build",
+        "build:ts": "pnpm --filter @wae/open-ssh run build",
         "build:ui": "pnpm --filter @wae/open-ssh-ui run build",
         "stage:napi": "wae native stage",
         "smoke:napi": "wae native smoke",
         "check:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
-        "gui": "wae build && pnpm --filter @wae/open-ssh-cli exec node ./dist/cli.js gui"
+        "gui": "wae build && pnpm --filter @wae/open-ssh exec node ./dist/cli.js gui"
     },
     "devDependencies": {
         "@wae/wae": "0.0.5",

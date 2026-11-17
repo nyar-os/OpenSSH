@@ -1,7 +1,7 @@
 {
     "name": "@wae/open-ssh",
     "version": "0.0.0",
-    "description": "OpenSSH facade: native loading, capability model, and audit client",
+    "description": "OpenSSH library and `open-ssh` command over native capabilities",
     "license": "Apache-2.0",
     "type": "module",
     "engines": {
@@ -9,6 +9,9 @@
     },
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
+    "bin": {
+        "open-ssh": "./dist/cli.js"
+    },
     "exports": {
         ".": {
             "types": "./dist/index.d.ts",
@@ -17,12 +20,20 @@
     },
     "files": [
         "dist",
-        "Readme.md"
+        "locales",
+        "readme.md"
     ],
     "scripts": {
         "build": "tsc -p tsconfig.json"
     },
+    "dependencies": {
+        "@wae/commander": "0.0.5"
+    },
     "optionalDependencies": {
+        "@wae/open-ssh-darwin-arm64": "workspace:*",
+        "@wae/open-ssh-darwin-x64": "workspace:*",
+        "@wae/open-ssh-linux-arm64": "workspace:*",
+        "@wae/open-ssh-linux-x64": "workspace:*",
         "@wae/open-ssh-win32-x64": "workspace:*"
     },
     "devDependencies": {
