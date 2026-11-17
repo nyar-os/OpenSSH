@@ -54,13 +54,11 @@ evidence.
 | Path | Responsibility |
 |------|----------------|
 | `projects/open-ssh.rs/crates/core` | Portable domain model, capability matrix, transport rows, audit fields |
-| `projects/open-ssh.rs/crates/napi` | Platform-neutral N-API surface over the `wae` facade |
-| `projects/open-ssh.rs/crates/cli` | Command ids, exit codes, and the machine-readable contract |
-| `projects/open-ssh.ts/packages/open-ssh` | Typed library over the native boundary. Owns no `bin` |
-| `projects/open-ssh.ts/packages/open-ssh-cli` | The `open-ssh` command entry and locales |
-| `projects/open-ssh.ts/packages/open-ssh-ui` | VMZ page and design tokens. Staged into the CLI `dist/gui` |
+| `projects/open-ssh.rs/crates/napi` | Platform-neutral N-API surface over the `wae` facade. Every capability reaches TypeScript here |
+| `projects/open-ssh.ts/packages/open-ssh` | The whole author surface: `new OpenSSH(options)`, the `open-ssh` bin, locales, and the platform loader |
+| `projects/open-ssh.ts/packages/open-ssh-ui` | VMZ page and design tokens. Staged into the package `dist/gui` |
 | `projects/open-ssh.ts/packages/open-ssh-skills` | Agent skills with frontmatter and safety prerequisites |
-| `projects/open-ssh.ts/packages/open-ssh-win32-x64` | First native platform package |
+| `projects/open-ssh.ts/packages/open-ssh-<platform>-<arch>` | Native addon packages for `win32-x64`, `darwin-arm64`, `darwin-x64`, `linux-x64`, and `linux-arm64` |
 | `wae.config.ts` | Native targets, platform packages, TS/UI/skills steps, staging and release set |
 
 ## First run
